@@ -23,12 +23,34 @@ if [ ! -f "${ORB_VAL_ENV_FILE}" ]; then
     exit 1
 fi
 
-# Boolean orb parameters interpolated into an `environment:` block render as the literal
-# strings "true"/"false" - verified directly with `circleci config process` against a minimal
-# repro of this exact <<parameters.x>> -> environment: -> shell pattern. (The act-orb `pull`/
-# `privileged`-style comment this previously cited as precedent turned out to carry the same
-# latent "1"/"0" bug rather than being confirmed-correct prior art - do not reintroduce it.)
-if [ "${ORB_VAL_PULL}" = "true" ]; then
+# NOTE on booleans -- DO NOT "simplify" this to a single comparison.
+# A boolean orb parameter interpolated into an `environment:` value does NOT render
+# consistently. Both of these have been observed in real pipelines:
+#   * a PUBLISHED registry orb yields "1" / "0"
+#   * an INLINE orb (what you use while developing, and what `circleci config process`
+#     reproduces) yields "true" / "false"
+# That asymmetry is the trap: code that works inline silently stops working once published.
+# An earlier revision of this comment claimed "true"/"false" was verified correct via
+# `circleci config process` and dismissed act-orb's "1"/"0" checks as a latent bug. That was
+# backwards - the test had been run against an INLINE orb, which is the one case that yields
+# "true". act-orb switched to "1"/"0" in commit 44ffcf8 precisely because the published path
+# yields "1".
+#
+# The underlying rule, per Gordon Syme (CircleCI pipelines team) in #pipelines-eng-team:
+# when `<< parameters.x >>` is the ENTIRE template the value is passed through as-is with its
+# type preserved; inside a LARGER string it is stringified. CircleCI's docs only hedge with
+# "Boolean values may be returned as a '1' for True and '0' for False."
+#
+# So: accept BOTH forms, always. Prefer a YAML `when:` condition where the branch can live in
+# config -- it evaluates the boolean natively and is immune to this class of bug entirely.
+orb_bool_is_true() {
+    case "${1:-}" in
+        1 | true | True | TRUE) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if orb_bool_is_true "${ORB_VAL_PULL:-}"; then
     echo "Pulling ${ORB_VAL_IMAGE}..."
     docker pull "${ORB_VAL_IMAGE}"
 fi
@@ -39,7 +61,7 @@ docker_cmd=(docker run --rm
     -v "${host_output_abs}:${ORB_VAL_CONTAINER_OUTPUT_FILE}"
     -w "${ORB_VAL_CONTAINER_WORKSPACE_PATH}")
 
-if [ "${ORB_VAL_PRIVILEGED}" = "true" ]; then
+if orb_bool_is_true "${ORB_VAL_PRIVILEGED:-}"; then
     docker_cmd+=(--privileged)
 fi
 
