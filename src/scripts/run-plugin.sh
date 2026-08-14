@@ -23,10 +23,12 @@ if [ ! -f "${ORB_VAL_ENV_FILE}" ]; then
     exit 1
 fi
 
-# Boolean orb parameters interpolated into an `environment:` block render as the
-# strings "1" (true) / "0" (false), not "true"/"false" - matching the convention the
-# reference act-orb's own scripts rely on (see run-act.sh).
-if [ "${ORB_VAL_PULL}" = "1" ]; then
+# Boolean orb parameters interpolated into an `environment:` block render as the literal
+# strings "true"/"false" - verified directly with `circleci config process` against a minimal
+# repro of this exact <<parameters.x>> -> environment: -> shell pattern. (The act-orb `pull`/
+# `privileged`-style comment this previously cited as precedent turned out to carry the same
+# latent "1"/"0" bug rather than being confirmed-correct prior art - do not reintroduce it.)
+if [ "${ORB_VAL_PULL}" = "true" ]; then
     echo "Pulling ${ORB_VAL_IMAGE}..."
     docker pull "${ORB_VAL_IMAGE}"
 fi
@@ -37,14 +39,20 @@ docker_cmd=(docker run --rm
     -v "${host_output_abs}:${ORB_VAL_CONTAINER_OUTPUT_FILE}"
     -w "${ORB_VAL_CONTAINER_WORKSPACE_PATH}")
 
-if [ "${ORB_VAL_PRIVILEGED}" = "1" ]; then
+if [ "${ORB_VAL_PRIVILEGED}" = "true" ]; then
     docker_cmd+=(--privileged)
 fi
 
 if [ -n "${ORB_VAL_ADDITIONAL_DOCKER_FLAGS}" ]; then
     # Intentional word-splitting: additional-docker-flags is a caller-supplied flag string.
+    # Globbing must be disabled around it, though: with pathname expansion left on, a single
+    # wildcard character anywhere in a flag value (a stray '*' in a build-arg version pin, a
+    # path glob, etc.) silently expands against this job's working directory and corrupts the
+    # docker run argument list with real filenames instead of the literal flag text.
+    set -f
     # shellcheck disable=SC2206
     extra_flags=(${ORB_VAL_ADDITIONAL_DOCKER_FLAGS})
+    set +f
     docker_cmd+=("${extra_flags[@]}")
 fi
 
@@ -78,7 +86,13 @@ elif docker run --rm -v "${host_workspace_abs}:/harness-orb-chown-target" busybo
     ownership_fixed=0
 fi
 if [ "${ownership_fixed}" -ne 0 ]; then
-    echo "Warning: failed to reclaim ownership of ${host_workspace_abs} after the plugin run; workspace files may still be root-owned." >&2
+    echo "Error: failed to reclaim ownership of ${host_workspace_abs} after the plugin run (tried sudo chown, plain chown, and a busybox container chown - all three failed). Workspace files may still be root-owned, which will surface as a confusing permission error in a later, unrelated step." >&2
+    # Don't let this hide behind a green step: if the plugin itself already failed, that
+    # exit code is the more useful signal and takes priority; but if the plugin succeeded,
+    # failing here (rather than only warning) is the only way this problem is visible at all.
+    if [ "${plugin_exit_code}" -eq 0 ]; then
+        exit 1
+    fi
 fi
 
 exit "${plugin_exit_code}"
