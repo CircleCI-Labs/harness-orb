@@ -1,0 +1,68 @@
+description: >
+  Invoke ONE Harness/Drone plugin image with `docker run`, exactly mirroring Harness's own
+  local-plugin-testing instructions (docker run -e PLUGIN_X=Y image) plus the bind mounts that
+  give the plugin container the checkout and an output-variable file to write to. No failure
+  wrapping, no retries: the plugin's own exit code and stderr reach the job unchanged.
+
+parameters:
+  image:
+    type: string
+    description: >
+      The plugin's Docker image reference, passed through verbatim (e.g. `plugins/slack` or
+      `plugins/slack:1.4.1`). An omitted tag means `:latest`, per Harness's own docs - this orb
+      does no version resolution of its own.
+  env-file:
+    type: string
+    default: /tmp/harness-orb/plugin.env
+    description: Host path of the docker --env-file written by `map-env`.
+  workspace-path:
+    type: string
+    default: .
+    description: Host directory bind-mounted into the plugin container as its workspace.
+  container-workspace-path:
+    type: string
+    default: /harness
+    description: Path inside the plugin container the workspace is bind-mounted to.
+  output-file:
+    type: string
+    default: /tmp/harness-orb/output.env
+    description: Host path of the file created by `create-output-file`.
+  container-output-file:
+    type: string
+    default: /harness-orb-output.env
+    description: Path inside the plugin container the output file is bind-mounted to.
+  privileged:
+    type: boolean
+    default: false
+    description: >
+      Run the plugin container with --privileged. Required by some plugins (e.g.
+      plugins/github-actions, some build/Kaniko-root-mode plugins) that need Docker-in-Docker.
+      Only meaningful on the `machine` executor - the docker executor and self-hosted Container
+      Runner both refuse privileged containers outright.
+  pull:
+    type: boolean
+    default: true
+    description: Run `docker pull` before `docker run`, so a mutable tag (e.g. :latest) is refreshed.
+  additional-docker-flags:
+    type: string
+    default: ""
+    description: Additional flags passed through to `docker run` verbatim.
+  step-name:
+    type: string
+    default: Run Harness plugin
+    description: Name of the step that runs the plugin container.
+
+steps:
+  - run:
+      name: << parameters.step-name >>
+      environment:
+        ORB_VAL_IMAGE: << parameters.image >>
+        ORB_VAL_ENV_FILE: << parameters.env-file >>
+        ORB_VAL_WORKSPACE_PATH: << parameters.workspace-path >>
+        ORB_VAL_CONTAINER_WORKSPACE_PATH: << parameters.container-workspace-path >>
+        ORB_VAL_OUTPUT_FILE: << parameters.output-file >>
+        ORB_VAL_CONTAINER_OUTPUT_FILE: << parameters.container-output-file >>
+        ORB_VAL_PRIVILEGED: << parameters.privileged >>
+        ORB_VAL_PULL: << parameters.pull >>
+        ORB_VAL_ADDITIONAL_DOCKER_FLAGS: << parameters.additional-docker-flags >>
+      command: <<include(scripts/run-plugin.sh)>>

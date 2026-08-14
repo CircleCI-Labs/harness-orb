@@ -1,0 +1,25 @@
+description: >
+  Default executor for running a Harness/Drone plugin container. Must be `machine`, not
+  `docker` + setup_remote_docker: plugin containers need a real bind-mount of the checkout
+  (setup_remote_docker's Docker host is a separate machine and cannot bind-mount the job's
+  filesystem - see CircleCI's own Docker Compose volume-mounting docs), and some plugins
+  require --privileged, which the docker executor and self-hosted Container Runner both disallow.
+
+parameters:
+  image:
+    type: string
+    default: ubuntu-2404:current
+    description: The machine image to run the plugin container on.
+  docker_layer_caching:
+    type: boolean
+    default: false
+    description: Enable Docker layer caching so repeated plugin image pulls are faster.
+  resource_class:
+    type: string
+    default: medium
+    description: Resource class for the executor.
+
+machine:
+  image: << parameters.image >>
+  docker_layer_caching: << parameters.docker_layer_caching >>
+resource_class: << parameters.resource_class >>

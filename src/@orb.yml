@@ -1,0 +1,11 @@
+version: 2.1
+
+description: |
+  Run a Harness CI / Drone plugin (a single Docker-image "Plugin" step from the Harness/Drone
+  ecosystem) natively inside a CircleCI job. Settings become PLUGIN_* env vars, the checked-out
+  workspace is bind-mounted into the plugin container, and any KEY=value lines the plugin writes
+  to its output file are exported verbatim into $BASH_ENV so native CircleCI steps can read them.
+
+display:
+  home_url: "https://developer.harness.io/docs/continuous-integration/use-ci/use-drone-plugins/run-a-drone-plugin-in-ci/"
+  source_url: "https://github.com/cci-labs/harness-orb"

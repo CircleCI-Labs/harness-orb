@@ -1,0 +1,111 @@
+version: 2.1
+orbs:
+  # Your orb will be automatically injected here during the pipeline.
+  # Reference your orb's jobs and commands below as they will exist when built.
+  orb-tools: circleci/orb-tools@12.3.0
+  # The orb definition is intentionally not included here. It will be injected into the pipeline.
+  harness: {}
+
+# Use this tag to ensure test jobs always run,
+# even though the downstream publish job will only run on release tags.
+filters: &filters
+  tags:
+    only: /.*/
+
+# Filter for release tags.
+release-filters: &release-filters
+  branches:
+    ignore: /.*/
+  tags:
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+jobs:
+  # Builds this repo's credential-free test-fixture plugin image locally, then exercises the
+  # `harness/plugin` COMMAND (create-output-file -> map-env -> run-plugin -> collect-outputs)
+  # against it inline among native steps, proving the whole chain works without any vendor
+  # credentials.
+  test_plugin_command:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - run:
+          name: Build credential-free test-fixture plugin image
+          command: docker build -t harness-orb-test-fixture:ci ./test-fixtures/plugin
+      - harness/plugin:
+          image: harness-orb-test-fixture:ci
+          pull: false
+          settings: |
+            message: hello from CircleCI
+            greeting: konnichiwa
+      - run:
+          name: Assert the plugin's output landed in $BASH_ENV
+          command: |
+            if [ "${GREETING_ECHOED:-}" != "konnichiwa" ]; then
+              echo "GREETING_ECHOED was '${GREETING_ECHOED:-<unset>}', expected 'konnichiwa'" >&2
+              exit 1
+            fi
+            if [ "${PLUGIN_RESULT:-}" != "ok" ]; then
+              echo "PLUGIN_RESULT was '${PLUGIN_RESULT:-<unset>}', expected 'ok'" >&2
+              exit 1
+            fi
+            echo "Plugin outputs correctly exported into \$BASH_ENV: GREETING_ECHOED=${GREETING_ECHOED} PLUGIN_RESULT=${PLUGIN_RESULT}"
+      - run:
+          name: Assert the workspace file the plugin wrote is readable and not root-owned
+          command: |
+            test -f plugin-wrote-this.txt
+            cat plugin-wrote-this.txt
+            owner_uid="$(stat -c %u plugin-wrote-this.txt 2>/dev/null || stat -f %u plugin-wrote-this.txt)"
+            if [ "${owner_uid}" != "$(id -u)" ]; then
+              echo "plugin-wrote-this.txt is owned by uid ${owner_uid}, expected $(id -u) (the job user) - ownership fix-up did not work" >&2
+              exit 1
+            fi
+
+workflows:
+  test-deploy:
+    jobs:
+      # Make sure to include "filters: *filters" in every test job you want to run as part of your deployment.
+      # Test your orb's commands in a custom job and test your orb's jobs directly as a part of this workflow.
+      - test_plugin_command:
+          filters: *filters
+      - harness/plugin:
+          name: "Testing Overriding Executor"
+          image: alpine/git
+          pull: false
+          settings: |
+            message: not used by alpine/git, just checking the container starts
+          additional-docker-flags: --entrypoint sh
+          executor:
+            name: harness/default
+            image: ubuntu-2404:current
+            resource_class: medium
+          filters: *filters
+      # The orb must be re-packed for publishing, and saved to the workspace.
+      - orb-tools/pack:
+          filters: *filters
+          requires:
+            - test_plugin_command
+            - "Testing Overriding Executor"
+      - orb-tools/publish:
+          name: "Publish Dev"
+          orb_name: cci-labs/harness
+          vcs_type: << pipeline.project.type >>
+          pub_type: dev
+          # Ensure this job requires all test jobs and the pack job.
+          requires:
+            - orb-tools/pack
+          context: orb-publishing
+          release_environment: orbs-dev
+          github_token: GHI_TOKEN
+      - orb-tools/publish:
+          name: "Publish Production"
+          orb_name: cci-labs/harness
+          vcs_type: << pipeline.project.type >>
+          pub_type: production
+          # Ensure this job requires all test jobs and the pack job.
+          requires:
+            - orb-tools/pack
+          context: orb-publishing
+          filters: *release-filters
+          release_environment: orbs-prod
+          github_token: GHI_TOKEN

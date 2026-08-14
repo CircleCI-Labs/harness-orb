@@ -1,0 +1,80 @@
+description: >
+  Run ONE Harness/Drone plugin as a standalone job, callable from a workflow. Defaults to the
+  `machine` executor (required for a real bind-mounted workspace and, when needed, --privileged).
+
+parameters:
+  checkout:
+    type: boolean
+    default: true
+    description: Checkout the CircleCI repository before running the plugin.
+  image:
+    type: string
+    description: >
+      The plugin's Docker image reference, passed through verbatim (e.g. `plugins/slack` or
+      `plugins/slack:1.4.1`). An omitted tag means `:latest`, per Harness's own docs.
+  settings:
+    type: string
+    default: ""
+    description: >
+      Plugin settings, one `key: value` per line. Each key becomes PLUGIN_<KEY>. Reference
+      $MY_ENV_VAR / ${MY_ENV_VAR} to pull a value from a context or project env var at runtime.
+  privileged:
+    type: boolean
+    default: false
+    description: Run the plugin container with --privileged.
+  pull:
+    type: boolean
+    default: true
+    description: Run `docker pull` before invoking the plugin, refreshing mutable tags.
+  workspace-path:
+    type: string
+    default: .
+    description: Host directory bind-mounted into the plugin container as its workspace.
+  container-workspace-path:
+    type: string
+    default: /harness
+    description: Path inside the plugin container the workspace is bind-mounted to.
+  output-file:
+    type: string
+    default: /tmp/harness-orb/output.env
+    description: Host path used to capture the plugin's output variables.
+  container-output-file:
+    type: string
+    default: /harness-orb-output.env
+    description: Path inside the plugin container the output file is bind-mounted to.
+  env-file:
+    type: string
+    default: /tmp/harness-orb/plugin.env
+    description: Host path of the derived docker --env-file.
+  additional-docker-flags:
+    type: string
+    default: ""
+    description: Additional flags passed through to `docker run` verbatim.
+  step-name:
+    type: string
+    default: Run Harness plugin
+    description: Name of the step that runs the plugin container.
+  executor:
+    type: executor
+    default: default
+    description: The executor to run the plugin in. Must provide a real Docker daemon and bind mounts (machine, not docker+setup_remote_docker).
+
+executor: << parameters.executor >>
+
+steps:
+  - when:
+      condition: << parameters.checkout >>
+      steps:
+        - checkout
+  - plugin:
+      image: << parameters.image >>
+      settings: << parameters.settings >>
+      privileged: << parameters.privileged >>
+      pull: << parameters.pull >>
+      workspace-path: << parameters.workspace-path >>
+      container-workspace-path: << parameters.container-workspace-path >>
+      output-file: << parameters.output-file >>
+      container-output-file: << parameters.container-output-file >>
+      env-file: << parameters.env-file >>
+      additional-docker-flags: << parameters.additional-docker-flags >>
+      step-name: << parameters.step-name >>

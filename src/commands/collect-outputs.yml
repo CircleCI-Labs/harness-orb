@@ -1,0 +1,19 @@
+description: >
+  Read the plugin's output file (KEY=value lines it wrote to $DRONE_OUTPUT/$HARNESS_OUTPUT_FILE)
+  back on the host side, and export every value VERBATIM under the plugin's own key into
+  $BASH_ENV, so subsequent NATIVE CircleCI steps in the job can read it as an ordinary env var.
+  This re-implements Harness's proprietary `<+steps.ID.output.outputVariables.X>` expression
+  syntax as a plain file/env-var mechanism, since CircleCI has no step-output-variable language.
+
+parameters:
+  output-file:
+    type: string
+    default: /tmp/harness-orb/output.env
+    description: Host path of the file created by `create-output-file` and written to by the plugin.
+
+steps:
+  - run:
+      name: Collect Harness plugin outputs into $BASH_ENV
+      environment:
+        ORB_VAL_OUTPUT_FILE: << parameters.output-file >>
+      command: <<include(scripts/collect-outputs.sh)>>
