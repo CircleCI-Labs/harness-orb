@@ -35,6 +35,22 @@ while IFS= read -r line || [ -n "${line}" ]; do
         continue
     fi
 
+    # Reject shell/interpreter-control variable names outright, even though they pass the
+    # syntax check above. The plugin container has write access to the bind-mounted workspace
+    # (the same one later native steps run from), so a hostile or supply-chain-compromised
+    # plugin image could otherwise plant a binary in the workspace and simply emit an output
+    # line named e.g. PATH=./evilbin:/usr/bin:/bin or BASH_ENV=<a script it wrote> - both of
+    # which we then export into $BASH_ENV, giving it code execution in every later native step
+    # that sources $BASH_ENV, with that job's secrets. This list is deliberately conservative
+    # (block known-dangerous names) rather than an allowlist, to keep VERBATIM passthrough for
+    # everything else per this orb's design.
+    case "${key}" in
+        PATH | BASH_ENV | IFS | ENV | SHELLOPTS | PS4 | LD_PRELOAD | LD_LIBRARY_PATH | HOME | TMPDIR)
+            echo "Warning: ignoring output line that would overwrite the reserved variable '${key}' - refusing to let a plugin's output hijack a shell/interpreter control variable for later native steps: ${line}" >&2
+            continue
+            ;;
+    esac
+
     # Export the plugin's own key VERBATIM (no renaming) with the value quoted for BASH_ENV,
     # so a later `source $BASH_ENV` in a native run step reproduces it exactly, special
     # characters included.

@@ -61,12 +61,82 @@ jobs:
               exit 1
             fi
 
+  # Regression test for a fixed CRITICAL bug: run-plugin.sh compared boolean orb parameters
+  # against the literal strings "1"/"0", but CircleCI actually renders them as "true"/"false" -
+  # so `pull` (default true) and `privileged` never took effect no matter what a caller set.
+  # This escaped the test_plugin_command / "Testing Overriding Executor" jobs above because both
+  # pass `pull: false` explicitly and neither exercises `privileged: true`, which coincidentally
+  # matches the bug's always-false behavior. Exercises run-plugin.sh directly (no real docker
+  # daemon interaction needed) with a fake `docker` shimmed onto $PATH that just records its own
+  # argv, so this is fast, deterministic, and needs no vendor credentials or network access.
+  test_run_plugin_booleans:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - run:
+          name: Regression test - pull/privileged booleans actually reach `docker run`
+          command: |
+            set -euo pipefail
+            fakebin="$(mktemp -d)"
+            call_log="$(mktemp)"
+            printf '#!/bin/bash\necho "$@" >>"${DOCKER_CALL_LOG}"\n' >"${fakebin}/docker"
+            chmod +x "${fakebin}/docker"
+
+            workspace="$(mktemp -d)"
+            output_file="$(mktemp)"
+            env_file="$(mktemp)"
+
+            run_case() {
+              : >"${call_log}"
+              PATH="${fakebin}:${PATH}" \
+                DOCKER_CALL_LOG="${call_log}" \
+                ORB_VAL_IMAGE="test/image" \
+                ORB_VAL_ENV_FILE="${env_file}" \
+                ORB_VAL_WORKSPACE_PATH="${workspace}" \
+                ORB_VAL_CONTAINER_WORKSPACE_PATH="/harness" \
+                ORB_VAL_OUTPUT_FILE="${output_file}" \
+                ORB_VAL_CONTAINER_OUTPUT_FILE="/harness-orb-output.env" \
+                ORB_VAL_PRIVILEGED="$1" \
+                ORB_VAL_PULL="$2" \
+                ORB_VAL_ADDITIONAL_DOCKER_FLAGS="" \
+                bash src/scripts/run-plugin.sh
+            }
+
+            run_case "true" "true"
+            if ! grep -qx "pull test/image" "${call_log}"; then
+              echo "FAIL: pull: true did not invoke 'docker pull' - got:" >&2
+              cat "${call_log}" >&2
+              exit 1
+            fi
+            if ! grep -q -- "--privileged" "${call_log}"; then
+              echo "FAIL: privileged: true did not add --privileged to docker run - got:" >&2
+              cat "${call_log}" >&2
+              exit 1
+            fi
+            echo "OK: privileged: true and pull: true both took effect."
+
+            run_case "false" "false"
+            if grep -q "^pull " "${call_log}"; then
+              echo "FAIL: pull: false still invoked 'docker pull' - got:" >&2
+              cat "${call_log}" >&2
+              exit 1
+            fi
+            if grep -q -- "--privileged" "${call_log}"; then
+              echo "FAIL: privileged: false still added --privileged to docker run - got:" >&2
+              cat "${call_log}" >&2
+              exit 1
+            fi
+            echo "OK: privileged: false and pull: false both correctly did nothing."
+
 workflows:
   test-deploy:
     jobs:
       # Make sure to include "filters: *filters" in every test job you want to run as part of your deployment.
       # Test your orb's commands in a custom job and test your orb's jobs directly as a part of this workflow.
       - test_plugin_command:
+          filters: *filters
+      - test_run_plugin_booleans:
           filters: *filters
       - harness/plugin:
           name: "Testing Overriding Executor"
@@ -85,6 +155,7 @@ workflows:
           filters: *filters
           requires:
             - test_plugin_command
+            - test_run_plugin_booleans
             - "Testing Overriding Executor"
       - orb-tools/publish:
           name: "Publish Dev"

@@ -1,6 +1,6 @@
 description: >
   Create the host-side file that will be bind-mounted into the plugin container as its
-  $DRONE_OUTPUT / $HARNESS_OUTPUT_FILE. The plugin appends KEY=value lines to it; a later
+  $DRONE_OUTPUT / $HARNESS_OUTPUT. The plugin appends KEY=value lines to it; a later
   `collect-outputs` step reads it back and exports the values into $BASH_ENV.
 
 parameters:

@@ -26,7 +26,7 @@ parameters:
   container-output-file:
     type: string
     default: /harness-orb-output.env
-    description: Path inside the plugin container the output file is bind-mounted to (DRONE_OUTPUT/HARNESS_OUTPUT_FILE).
+    description: Path inside the plugin container the output file is bind-mounted to (DRONE_OUTPUT/HARNESS_OUTPUT).
 
 steps:
   - run:

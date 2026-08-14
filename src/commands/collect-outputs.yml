@@ -1,5 +1,5 @@
 description: >
-  Read the plugin's output file (KEY=value lines it wrote to $DRONE_OUTPUT/$HARNESS_OUTPUT_FILE)
+  Read the plugin's output file (KEY=value lines it wrote to $DRONE_OUTPUT/$HARNESS_OUTPUT)
   back on the host side, and export every value VERBATIM under the plugin's own key into
   $BASH_ENV, so subsequent NATIVE CircleCI steps in the job can read it as an ordinary env var.
   This re-implements Harness's proprietary `<+steps.ID.output.outputVariables.X>` expression

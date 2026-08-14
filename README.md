@@ -17,9 +17,9 @@ CircleCI Labs, including this repo, is a collection of solutions developed by me
 
 A Harness/Drone plugin's entire execution contract is `docker run -e PLUGIN_X=Y image` - confirmed directly from Harness's own [local-plugin-testing instructions](https://developer.harness.io/docs/continuous-integration/use-ci/use-drone-plugins/custom_plugins/#test-plugins-locally). This orb reduces to exactly that, decomposed into four layered commands so a future multi-plugin chain could reuse pieces of it without a breaking change:
 
-1. **`create-output-file`** - creates the host-side file that becomes the plugin's `$DRONE_OUTPUT`/`$HARNESS_OUTPUT_FILE`.
-2. **`map-env`** - turns your `settings:` block into `PLUGIN_<KEY>` env vars (case rule verified against real plugin source, not assumed), maps the CIRCLE_\* vars that have a verified DRONE_\*/HARNESS_\* equivalent, and resolves `$VAR`/`${VAR}` references at runtime via [`circleci env subst`](https://circleci.com/changelog/new-cli-command-env-subst) so secrets never sit in orb config.
-3. **`run-plugin`** - the actual `docker run`, bind-mounting your checkout and the output file into the container. No failure wrapping, no retries: the plugin's own exit code and stderr reach the job unchanged.
+1. **`create-output-file`** - creates the host-side file that becomes the plugin's `$DRONE_OUTPUT`/`$HARNESS_OUTPUT`.
+2. **`map-env`** - turns your `settings:` block into `PLUGIN_<KEY>` env vars (case rule verified against real plugin source, not assumed), maps the CIRCLE_\* vars that have a verified DRONE_\*/HARNESS_\* equivalent, and resolves `$VAR`/`${VAR}` references at runtime via [`circleci env subst`](https://circleci.com/changelog/new-cli-command-env-subst) so secrets never sit in orb config - substitution runs on each settings value only, after the block has already been split into individual `key: value` lines, so a substituted secret's value can never inject an extra settings line of its own.
+3. **`run-plugin`** - the actual `docker run`, bind-mounting your checkout and the output file into the container. No failure wrapping, no retries: the plugin's own exit code and stderr reach the job unchanged - which also means a missing **plugin-specific** required setting (e.g. Slack's `webhook`) surfaces as whatever error the vendor's own binary happens to print, not an orb-level validation message. Consult the plugin's own README/Marketplace page for its required settings; this orb does not know them.
 4. **`collect-outputs`** - reads the plugin's output file back and exports every value **verbatim**, under the plugin's own key, into `$BASH_ENV`.
 
 The `plugin` command composes all four; the `plugin` job wraps that command with `checkout` and an executor.
@@ -36,7 +36,7 @@ Plugin containers need a real bind-mount of the checkout, and some need `--privi
 settings: |
   webhook: $SLACK_WEBHOOK
   channel: dev
-  icon-url: https://unsplash.it/256/256/?random
+  icon_url: https://unsplash.it/256/256/?random
   tags: latest,1.0.1,1.0
   with: {"path":"pom.xml","destination":"cie-demo-pipeline/github-action"}
 ```
@@ -51,15 +51,20 @@ PLUGIN_TAGS=latest,1.0.1,1.0
 PLUGIN_WITH={"path":"pom.xml","destination":"cie-demo-pipeline/github-action"}
 ```
 
-- **Scalars and kebab-case keys**: uppercased, `-`/`.` -> `_` (Harness's own docs: `PLUGIN_PATH` <- `path`, `PLUGIN_REPO_URL` <- `repo_url`; kebab-case is normalized the same way since env var names can't contain hyphens).
+- **Scalars and kebab-case keys**: uppercased, `-`/`.` -> `_` (Harness's own docs: `PLUGIN_PATH` <- `path`, `PLUGIN_REPO_URL` <- `repo_url`; kebab-case is normalized the same way since env var names can't contain hyphens). A key that doesn't produce a legal env var name after this transform (e.g. one with a stray space) is rejected with an error naming the offending settings line, rather than silently writing a broken `--env-file`.
 - **Booleans**: passed through as the literal string (`true`/`false`).
 - **Lists**: written as a single comma-joined string, the same convention [Harness's own Drone-to-Harness migration guide](https://developer.harness.io/docs/continuous-integration/use-ci/use-drone-plugins/run-a-drone-plugin-in-ci/#convert-drone-yaml-to-harness-yaml) uses.
-- **Nested maps**: written by you as a literal JSON string - that already *is* the wire format (Harness itself JSON-encodes `settings.with` into a single `PLUGIN_WITH` string; well-behaved plugins `json.Unmarshal` it, e.g. `plugins/github-actions`).
+- **Nested maps**: written by you as a literal JSON string - that already *is* the wire format (Harness itself JSON-encodes `settings.with` into a single `PLUGIN_WITH` string; well-behaved plugins `json.Unmarshal` it, e.g. `plugins/github-actions`). This is the one place a Harness user has to hand-translate: Harness lets you write `with:` as genuine indented nested YAML, but this orb's `settings` is a flat string, so you flatten it into single-line JSON yourself. Get a quote or comma wrong and `map-env` rejects it immediately with the offending settings key and value (rather than letting a malformed string reach the plugin's own JSON-unmarshal call, which would fail with an opaque error deep inside the vendor's binary) - but only if `python3` is on the executor image; if it isn't, the string is passed through unvalidated.
 - **Secrets**: reference `$MY_ENV_VAR` / `${MY_ENV_VAR}` - resolved at runtime against the job's real context/project env vars via `circleci env subst`, so the secret never appears in orb config.
 
 ### CIRCLE_\* -> DRONE_\*/HARNESS_\*
 
-Only vars with a verified equivalent are mapped: `DRONE_REPO`, `DRONE_REPO_OWNER`, `DRONE_REPO_NAME`, `DRONE_COMMIT`, `DRONE_COMMIT_BRANCH`, `DRONE_BUILD_NUMBER`, `DRONE_WORKSPACE`/`HARNESS_WORKSPACE`, `DRONE_OUTPUT`/`HARNESS_OUTPUT_FILE`. Deliberately **not** shimmed, because no CircleCI equivalent exists without inventing one: `DRONE_BUILD_EVENT`, `DRONE_STAGE_STATUS`, `DRONE_BUILD_STATUS`, `DRONE_FAILED_STEPS`, `DRONE_COMMIT_AUTHOR*`, `HARNESS_ACCOUNT_ID`/`ORG_ID`/`PROJECT_ID`/`PIPELINE_ID`/`EXECUTION_ID`/`DELEGATE_ID`, `DRONE_NETRC_*`, `DRONE_SEMVER*`/`DRONE_CALVER`.
+Only vars with a verified equivalent are mapped: `DRONE_REPO`, `DRONE_REPO_OWNER`, `DRONE_REPO_NAME`, `DRONE_COMMIT`, `DRONE_COMMIT_BRANCH`, `DRONE_BUILD_NUMBER`, `DRONE_WORKSPACE`/`HARNESS_WORKSPACE`, `DRONE_OUTPUT`/`HARNESS_OUTPUT`. Deliberately **not** shimmed, because no CircleCI equivalent exists without inventing one: `DRONE_BUILD_EVENT`, `DRONE_STAGE_STATUS`, `DRONE_BUILD_STATUS`, `DRONE_FAILED_STEPS`, `DRONE_COMMIT_AUTHOR*`, `HARNESS_ACCOUNT_ID`/`ORG_ID`/`PROJECT_ID`/`PIPELINE_ID`/`EXECUTION_ID`/`DELEGATE_ID`, `DRONE_NETRC_*`, `DRONE_SEMVER*`/`DRONE_CALVER`.
+
+Two further gaps worth calling out explicitly, since this is the closest thing this README has to a "what doesn't work" section:
+
+- **`HARNESS_OUTPUT_SECRET_FILE`** is not wired up. This is Harness's separate, newer, feature-flag-gated mechanism for output variables that Harness auto-masks as secrets in logs ([Output secrets](https://developer.harness.io/docs/continuous-integration/use-ci/use-drone-plugins/plugin-step-settings-reference/#output-secrets)). This orb only reads back `DRONE_OUTPUT`/`HARNESS_OUTPUT`; a plugin that writes secret-flagged output via `$HARNESS_OUTPUT_SECRET_FILE` has no equivalent here, and any value it does export the normal way lands in `$BASH_ENV` unmasked, same as everything else this orb exports verbatim.
+- **Output variables are job-scoped here, not stage-scoped like Harness's.** Harness's own output-variable expressions work cross-stage (`<+stages.STAGE_ID...>`); this orb's mechanism (`$BASH_ENV`) only lives for the remainder of the current CircleCI **job**. A plugin's output can reach a later native step in the same job, but not a later CircleCI job in the same workflow.
 
 ### Workspace ownership
 
@@ -118,7 +123,8 @@ jobs:
             webhook: $SLACK_WEBHOOK
             channel: dev
       - run:
-          command: echo "Plugin reported: $OUTPUT_VAR_NAME"
+          command: |
+            echo "Plugin reported: $OUTPUT_VAR_NAME"
 workflows:
   main:
     jobs:
