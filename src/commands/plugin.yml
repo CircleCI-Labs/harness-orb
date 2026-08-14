@@ -2,7 +2,7 @@ description: >
   Run ONE Harness/Drone plugin as a single step among native CircleCI steps: settings become
   PLUGIN_* env vars, the checkout is bind-mounted into the plugin container, and the plugin's
   own output variables land in $BASH_ENV under their verbatim vendor names. Composed from
-  create-output-file -> map-env -> run -> collect-outputs so those layers can be used
+  create-output-file -> map-env -> run-plugin -> collect-outputs so those layers can be used
   independently, or chained for multiple plugins, without a breaking change later.
 
 parameters:
