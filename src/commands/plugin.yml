@@ -1,0 +1,80 @@
+description: >
+  Run ONE Harness/Drone plugin as a single step among native CircleCI steps: settings become
+  PLUGIN_* env vars, the checkout is bind-mounted into the plugin container, and the plugin's
+  own output variables land in $BASH_ENV under their verbatim vendor names. Composed from
+  create-output-file -> map-env -> run -> collect-outputs so those layers can be used
+  independently, or chained for multiple plugins, without a breaking change later.
+
+parameters:
+  image:
+    type: string
+    description: >
+      The plugin's Docker image reference, passed through verbatim (e.g. `plugins/slack` or
+      `plugins/slack:1.4.1`). An omitted tag means `:latest`, per Harness's own docs.
+  settings:
+    type: string
+    default: ""
+    description: >
+      Plugin settings, one `key: value` per line. Each key becomes PLUGIN_<KEY>. Reference
+      $MY_ENV_VAR / ${MY_ENV_VAR} to pull a value from a context or project env var at runtime
+      (resolved via `circleci env subst`) without it ever appearing in this parameter's value.
+  privileged:
+    type: boolean
+    default: false
+    description: >
+      Run the plugin container with --privileged (needed by some Docker-in-Docker plugins,
+      e.g. plugins/github-actions). Requires the `machine` executor.
+  pull:
+    type: boolean
+    default: true
+    description: Run `docker pull` before invoking the plugin, refreshing mutable tags.
+  workspace-path:
+    type: string
+    default: .
+    description: Host directory bind-mounted into the plugin container as its workspace.
+  container-workspace-path:
+    type: string
+    default: /harness
+    description: Path inside the plugin container the workspace is bind-mounted to (DRONE_WORKSPACE/HARNESS_WORKSPACE).
+  output-file:
+    type: string
+    default: /tmp/harness-orb/output.env
+    description: Host path used to capture the plugin's output variables.
+  container-output-file:
+    type: string
+    default: /harness-orb-output.env
+    description: Path inside the plugin container the output file is bind-mounted to (DRONE_OUTPUT/HARNESS_OUTPUT_FILE).
+  env-file:
+    type: string
+    default: /tmp/harness-orb/plugin.env
+    description: Host path of the derived docker --env-file.
+  additional-docker-flags:
+    type: string
+    default: ""
+    description: Additional flags passed through to `docker run` verbatim.
+  step-name:
+    type: string
+    default: Run Harness plugin
+    description: Name of the step that runs the plugin container.
+
+steps:
+  - create-output-file:
+      output-file: << parameters.output-file >>
+  - map-env:
+      settings: << parameters.settings >>
+      env-file: << parameters.env-file >>
+      container-workspace-path: << parameters.container-workspace-path >>
+      container-output-file: << parameters.container-output-file >>
+  - run-plugin:
+      image: << parameters.image >>
+      env-file: << parameters.env-file >>
+      workspace-path: << parameters.workspace-path >>
+      container-workspace-path: << parameters.container-workspace-path >>
+      output-file: << parameters.output-file >>
+      container-output-file: << parameters.container-output-file >>
+      privileged: << parameters.privileged >>
+      pull: << parameters.pull >>
+      additional-docker-flags: << parameters.additional-docker-flags >>
+      step-name: << parameters.step-name >>
+  - collect-outputs:
+      output-file: << parameters.output-file >>

@@ -1,0 +1,29 @@
+description: >
+  Run a Harness/Drone plugin inline, as a single step among native CircleCI steps in an
+  otherwise ordinary job, then read the plugin's output variable from a native `run` step.
+
+usage:
+  version: 2.1
+  orbs:
+    harness: cci-labs/harness@x.y.z
+  jobs:
+    build:
+      machine:
+        image: ubuntu-2404:current
+      steps:
+        - checkout
+        - harness/plugin:
+            image: plugins/slack
+            settings: |
+              webhook: $SLACK_WEBHOOK
+              channel: dev
+        - run:
+            name: Use the plugin's output in a native step
+            command: |
+              # Replace OUTPUT_VAR_NAME with whatever output variable the specific plugin
+              # image you're running documents (this orb exports it VERBATIM, unrenamed).
+              echo "Plugin reported: $OUTPUT_VAR_NAME"
+  workflows:
+    main:
+      jobs:
+        - build

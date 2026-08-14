@@ -1,0 +1,17 @@
+description: >
+  Create the host-side file that will be bind-mounted into the plugin container as its
+  $DRONE_OUTPUT / $HARNESS_OUTPUT_FILE. The plugin appends KEY=value lines to it; a later
+  `collect-outputs` step reads it back and exports the values into $BASH_ENV.
+
+parameters:
+  output-file:
+    type: string
+    default: /tmp/harness-orb/output.env
+    description: Host path of the file the plugin will write its outputs to.
+
+steps:
+  - run:
+      name: Create Harness plugin output file
+      environment:
+        ORB_VAL_OUTPUT_FILE: << parameters.output-file >>
+      command: <<include(scripts/create-output-file.sh)>>

@@ -1,0 +1,17 @@
+description: >
+  Post a Slack notification using the real `plugins/slack` Drone/Harness plugin image, driven
+  entirely by this orb's `plugin` job - no Harness account or Drone runner involved.
+
+usage:
+  version: 2.1
+  orbs:
+    harness: cci-labs/harness@x.y.z
+  workflows:
+    notify:
+      jobs:
+        - harness/plugin:
+            image: plugins/slack
+            settings: |
+              webhook: $SLACK_WEBHOOK
+              channel: dev
+              icon_url: https://unsplash.it/256/256/?random

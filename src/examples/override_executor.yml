@@ -1,0 +1,19 @@
+description: >
+  Override the machine image and resource class the plugin container runs on.
+
+usage:
+  version: 2.1
+  orbs:
+    harness: cci-labs/harness@x.y.z
+  workflows:
+    main:
+      jobs:
+        - harness/plugin:
+            image: plugins/webhook
+            settings: |
+              urls: $BUILD_NOTIFY_WEBHOOK_URL
+              content_type: application/json
+            executor:
+              name: harness/default
+              image: ubuntu-2404:current
+              resource_class: large

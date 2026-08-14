@@ -1,0 +1,39 @@
+description: >
+  Translate the orb's `settings` block into PLUGIN_<KEY> env vars (the Harness/Drone plugin
+  execution contract), map the subset of CIRCLE_* vars that have a verified DRONE_*/HARNESS_*
+  equivalent, and write everything to a docker --env-file. `$VAR`/`${VAR}` references inside
+  `settings` are resolved at runtime via `circleci env subst` so secrets never enter orb config.
+
+parameters:
+  settings:
+    type: string
+    default: ""
+    description: >
+      Plugin settings, one `key: value` per line (blank lines and lines starting with `#` are
+      ignored). Each key becomes PLUGIN_<KEY> (uppercased, `-`/`.` -> `_`). Lists are written the
+      way Harness's own migration guide does it: a single comma-joined string value. Nested maps
+      are written by the caller as a literal JSON string value (that IS the wire format - Harness
+      itself JSON-encodes settings.with -> PLUGIN_WITH). Reference $MY_ENV_VAR / ${MY_ENV_VAR} to
+      pull a value from a context or project env var without it ever appearing in config.
+  env-file:
+    type: string
+    default: /tmp/harness-orb/plugin.env
+    description: Host path to write the derived docker --env-file to.
+  container-workspace-path:
+    type: string
+    default: /harness
+    description: Path inside the plugin container the checkout is bind-mounted to (DRONE_WORKSPACE/HARNESS_WORKSPACE).
+  container-output-file:
+    type: string
+    default: /harness-orb-output.env
+    description: Path inside the plugin container the output file is bind-mounted to (DRONE_OUTPUT/HARNESS_OUTPUT_FILE).
+
+steps:
+  - run:
+      name: Map settings and CIRCLE_* vars to PLUGIN_*/DRONE_*/HARNESS_*
+      environment:
+        ORB_VAL_SETTINGS: << parameters.settings >>
+        ORB_VAL_ENV_FILE: << parameters.env-file >>
+        ORB_VAL_CONTAINER_WORKSPACE_PATH: << parameters.container-workspace-path >>
+        ORB_VAL_CONTAINER_OUTPUT_FILE: << parameters.container-output-file >>
+      command: <<include(scripts/map-env.sh)>>

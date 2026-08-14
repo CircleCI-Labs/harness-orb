@@ -1,0 +1,19 @@
+description: >
+  Some plugins (e.g. `plugins/github-actions`, some build/Kaniko-root-mode plugins) shell out
+  to Docker-in-Docker and need a privileged container. Set `privileged: true` - this only works
+  on the `machine` executor, which has real root/VM access; the docker executor and self-hosted
+  Container Runner both refuse privileged containers outright.
+
+usage:
+  version: 2.1
+  orbs:
+    harness: cci-labs/harness@x.y.z
+  workflows:
+    main:
+      jobs:
+        - harness/plugin:
+            image: plugins/github-actions
+            privileged: true
+            settings: |
+              uses: actions/hello-world-javascript-action@v1.1
+              with: {"who-to-greet":"Mona the Octocat"}
