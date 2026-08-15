@@ -10,7 +10,9 @@ parameters:
     type: string
     description: >
       The plugin's Docker image reference, passed through verbatim (e.g. `plugins/slack` or
-      `plugins/slack:1.4.1`). An omitted tag means `:latest`, per Harness's own docs.
+      `plugins/slack:1.4.1`). An omitted tag means `:latest`, per Harness's own docs. Pin by
+      digest (`plugins/slack@sha256:...`) for a reproducible build -- see "Immutable pinning"
+      in the README.
   settings:
     type: string
     default: ""
@@ -23,7 +25,11 @@ parameters:
     default: false
     description: >
       Run the plugin container with --privileged (needed by some Docker-in-Docker plugins,
-      e.g. plugins/github-actions). Requires the `machine` executor.
+      e.g. plugins/github-actions). Requires the `machine` executor. A full host-compromise
+      primitive, not a narrow carve-out: combined with the machine executor's real host-device
+      access, this grants the plugin container CAP_SYS_ADMIN, from which a compromised plugin
+      image can mount a host block device and read/write the entire VM filesystem. Only enable
+      for a plugin image you trust.
   pull:
     type: boolean
     default: true
@@ -51,11 +57,27 @@ parameters:
   additional-docker-flags:
     type: string
     default: ""
-    description: Additional flags passed through to `docker run` verbatim.
+    description: >
+      Additional flags passed through to `docker run` verbatim. Simple whitespace-split -- no
+      quoting support for values containing spaces. If you use this to pass `--network host`:
+      that collapses the plugin container into the job VM's own network namespace, so it can
+      then reach anything bound to the job's own loopback (a mock server, a database the job
+      started, a cloud metadata endpoint) that it otherwise couldn't -- a real trust-boundary
+      change, not just a networking convenience.
   step-name:
     type: string
     default: Run Harness plugin
     description: Name of the step that runs the plugin container.
+  test-results-path:
+    type: string
+    default: ""
+    description: >
+      Opt-in only - Harness's Plugin step type has no fixed, documented test-report
+      convention to default against (see the README's "Artifacts and test results" section),
+      so unlike this orb's sibling `bitbucket`/`buildkite` orbs there is no default-on
+      behavior here. If you know the specific plugin you're running writes JUnit XML to a
+      predictable path inside the checkout, set this to that path and `store_test_results`
+      runs against it after the plugin finishes. Left empty (the default), nothing runs.
 
 steps:
   - create-output-file:
@@ -78,3 +100,8 @@ steps:
       step-name: << parameters.step-name >>
   - collect-outputs:
       output-file: << parameters.output-file >>
+  - when:
+      condition: << parameters.test-results-path >>
+      steps:
+        - store_test_results:
+            path: << parameters.test-results-path >>

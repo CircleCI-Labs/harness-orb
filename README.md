@@ -8,7 +8,7 @@ The Harness Orb lets you run a single [Harness CI / Drone plugin](https://develo
 CircleCI Labs, including this repo, is a collection of solutions developed by members of CircleCI's field engineering teams through our engagement with various customer needs.
 
 -   ✅ Created by engineers @ CircleCI
--   ✅ Used by real CircleCI customers
+-   ⚠️ **Not yet used by production CircleCI customers.** This orb is currently dev-published only. What *is* verified: a real, credential-free Drone/Harness plugin (`plugins/docker`, running privileged, doing a real nested Docker build) runs green in this repo's own CI -- see `test_plugin_docker_privileged_complex_target` in `.circleci/test-deploy.yml`.
 -   ❌ **not** officially supported by CircleCI support
 
 ---
@@ -38,7 +38,8 @@ flowchart TD
     A[checkout] --> B["create-output-file<br/>host-side file -&gt; $DRONE_OUTPUT/$HARNESS_OUTPUT"]
     B --> C["map-env<br/>settings: -&gt; PLUGIN_*<br/>CIRCLE_* -&gt; DRONE_*/HARNESS_* (verified subset)<br/>circleci env subst resolves $SECRETS"]
     C --> D["run-plugin<br/>docker run --env-file ... -v checkout -v output-file<br/>[--privileged if requested]<br/>no failure wrapping: plugin's own exit code/stderr reach the job"]
-    D --> E["collect-outputs<br/>read output file back, export verbatim into $BASH_ENV<br/>denylist blocks PATH/BASH_ENV/IFS/... hijack attempts"]
+    D --> E["collect-outputs<br/>read output file back, export verbatim into $BASH_ENV<br/>denylist blocks PATH/BASH_ENV/GIT_SSH_COMMAND/... hijack attempts"]
+    E -.->|"test-results-path set (opt-in)"| F["store_test_results"]
 
     style C fill:#4a4a8a,color:#fff
     style D fill:#4a4a8a,color:#fff
@@ -166,6 +167,94 @@ Two further gaps worth calling out explicitly, since this is the closest thing t
 - **`HARNESS_OUTPUT_SECRET_FILE`** is not wired up. This is Harness's separate, newer, feature-flag-gated mechanism for output variables that Harness auto-masks as secrets in logs ([Output secrets](https://developer.harness.io/docs/continuous-integration/use-ci/use-drone-plugins/plugin-step-settings-reference/#output-secrets)). This orb only reads back `DRONE_OUTPUT`/`HARNESS_OUTPUT`; a plugin that writes secret-flagged output via `$HARNESS_OUTPUT_SECRET_FILE` has no equivalent here, and any value it does export the normal way lands in `$BASH_ENV` unmasked, same as everything else this orb exports verbatim.
 - **Output variables are job-scoped here, not stage-scoped like Harness's.** Harness's own output-variable expressions work cross-stage (`<+stages.STAGE_ID...>`); this orb's mechanism (`$BASH_ENV`) only lives for the remainder of the current CircleCI **job**. A plugin's output can reach a later native step in the same job, but not a later CircleCI job in the same workflow.
 
+#### Passing data across jobs anyway
+
+CircleCI has two real, native mechanisms for this -- neither needs an orb change, and the right
+one depends on what you're actually trying to do:
+
+- **Passing a plugin's output value to a downstream job** (the common case): after
+  `harness/plugin` runs, write the value you need to a file and `persist_to_workspace` it, then
+  `attach_workspace` in the downstream job and read the file with a plain `run` step:
+
+  ```yaml
+  - harness/plugin:
+      image: plugins/slack
+      settings: |
+        webhook: $SLACK_WEBHOOK
+  - run:
+      command: echo "$OUTPUT_VAR_NAME" > /tmp/workspace/plugin-output.txt
+  - persist_to_workspace:
+      root: /tmp/workspace
+      paths: [plugin-output.txt]
+  # -- downstream job --
+  - attach_workspace:
+      at: /tmp/workspace
+  - run:
+      command: OUTPUT_VAR_NAME="$(cat /tmp/workspace/plugin-output.txt)"; echo "$OUTPUT_VAR_NAME"
+  ```
+
+- **Branching which jobs run based on an upstream job's output** (the harder ask -- a genuine
+  workflow-level conditional): CircleCI has no native construct for this at all. The closest
+  real mechanism is a setup workflow plus the
+  [`circleci/continuation`](https://circleci.com/developer/orbs/orb/circleci/continuation) orb,
+  where an early job computes a value and calls `continuation/continue` with a config whose
+  `workflows:` block is shaped by that value. There is no way to do this with `harness/plugin`
+  output alone.
+
+### Immutable pinning
+
+`image` is passed through verbatim -- no version resolution of any kind. Any reference other
+than a full digest pin can silently point at different image content later with no diff in
+this repo to review: an omitted tag means `:latest` (the most mutable case), but even an
+explicit version tag (`plugins/slack:1.4.1`) can be force-moved by the image's own maintainer.
+`run-plugin` prints a one-line `WARNING` to the step's stderr whenever `image` doesn't contain
+`@sha256:...`, mirroring the identical unpinned-`#ref` warning the sibling `buildkite` orb
+already prints for a plugin reference with no ref pinned. To pin by digest, pull the image once
+and read its digest back:
+
+```shell
+docker pull plugins/slack:1.4.1
+docker inspect --format '{{.RepoDigests}}' plugins/slack:1.4.1
+# => [plugins/slack@sha256:1a2b3c...]
+```
+
+then use that full `image@sha256:...` string as `image`. This is a warning, not an enforced
+gate -- pinning is recommended, not required, since some plugins (and this orb's own examples)
+are deliberately shown against a floating tag for readability.
+
+### Docker-in-Docker and `--privileged` -- what it actually grants
+
+`privileged: true` (see "A Docker-in-Docker plugin that needs `--privileged`" above) is not a
+narrow "let Docker-in-Docker work" carve-out. Combined with the `machine` executor's real
+host-device access, `--privileged` grants the plugin container `CAP_SYS_ADMIN`. From there, a
+compromised or supply-chain-tampered plugin image can mount a host block device and read/write
+the entire job VM's filesystem -- a full host-compromise primitive. Only set `privileged: true`
+for a plugin image you trust, the same way you'd trust any other binary you run with root on
+CI.
+
+More generally: `run-plugin` always runs the plugin's Docker image with the job's full
+environment available to it via `--env-file` and a bind-mounted checkout. Treat every plugin
+image the same way you'd treat a third-party dependency you added to your build -- it is not
+sandboxed against the job's secrets or filesystem beyond what a plain `docker run` container
+boundary already gives you.
+
+### Caching the plugin image
+
+The `default` executor's `docker_layer_caching` parameter (off by default) enables CircleCI's
+Docker Layer Caching for the `machine` executor's Docker daemon, so a repeated pull of the same
+plugin image reuses previously-cached layers instead of pulling the full image again. **This is
+an opt-in, billed feature, gated by your CircleCI plan** -- see
+[CircleCI's Docker Layer Caching docs](https://circleci.com/docs/docker-layer-caching/) for
+current plan eligibility and pricing. Rule of thumb for whether it's worth turning on: most
+Harness/Drone plugin images (`plugins/slack`, `plugins/git`, and similar single-purpose plugins)
+are in the tens of megabytes and pull in low single-digit seconds -- DLC's own fixed overhead
+plausibly exceeds that, so leave it off. Larger plugin images (multi-hundred-MB to multi-GB --
+Android/ML/browser-class images, or a plugin that itself layers a large base image) are where
+DLC's layer-level reuse (a patch-version bump often only changes the top layer) starts to pay
+off over a full `docker pull` every run. There's no separate `docker save`/`load` caching
+mechanism in this orb on top of DLC -- it would be redundant with, and strictly worse than
+(all-or-nothing per exact tag, vs. DLC's per-layer reuse), a feature that already ships.
+
 ### Workspace ownership
 
 Plugin containers commonly run as root, so files they create in the bind-mounted workspace can be left root-owned on the host, breaking subsequent CircleCI steps. `run-plugin` reclaims ownership after every invocation - regardless of whether the plugin succeeded - trying `sudo chown` (what CircleCI's machine executor images document as available), then plain `chown`, then a throwaway container-based `chown` as a last resort, so the fix-up doesn't strictly depend on host sudo being configured.
@@ -287,6 +376,24 @@ one job? Reach for the `plugin` **command** (or the individual `create-output-fi
 `run-plugin`/`collect-outputs` commands) in a hand-rolled job instead -- see "Chaining two
 plugins" in [`src/examples/chain_two_plugins.yml`](src/examples/chain_two_plugins.yml).
 
+### Attaching a workspace before the plugin runs
+
+`pre-steps` run before the job's own internal `checkout` (see the caveat just above), which
+happens to be exactly the order a workspace attach needs: `attach_workspace` has to land before
+`checkout`, or checkout risks clobbering files a prior job wrote into the same paths. That means
+the correct CircleCI-native ordering already works today, with zero orb changes -- just put
+`attach_workspace` in `pre-steps`:
+
+```yaml
+- harness/plugin:
+    image: plugins/slack
+    settings: |
+      webhook: $SLACK_WEBHOOK
+    pre-steps:
+      - attach_workspace:
+          at: .
+```
+
 ## Limits
 
 What genuinely doesn't work through this orb, gathered in one place (each is explained in more
@@ -295,8 +402,8 @@ depth where linked):
 | Doesn't work | Why |
 |---|---|
 | **`HARNESS_OUTPUT_SECRET_FILE`** | Not wired up -- Harness's separate, feature-flag-gated auto-masked-output mechanism. A plugin using it has no equivalent here; see ["CIRCLE_* -> DRONE_*/HARNESS_*"](#circle_---drone_harness_) above. |
-| **Output variables spanning more than one CircleCI job** | This orb's `$BASH_ENV` mechanism is job-scoped; Harness's own output-variable expressions are stage-scoped (cross-job). See the same section above. |
-| **No `store_artifacts`/`store_test_results` default** | No vendor-wide Plugin-step convention exists to default against -- see "Artifacts and test results" above. |
+| **Output variables spanning more than one CircleCI job** | This orb's `$BASH_ENV` mechanism is job-scoped; Harness's own output-variable expressions are stage-scoped (cross-job). See "Passing data across jobs anyway" above for the real `persist_to_workspace`/`continuation`-orb workarounds. |
+| **No `store_artifacts` default, and `store_test_results` is opt-in only** | No vendor-wide Plugin-step convention exists to default `store_artifacts` against at all -- see "Artifacts and test results" above. `store_test_results` has an explicit opt-in via the `test-results-path` parameter (empty by default -- nothing runs) once *you* know your specific plugin's own JUnit XML output path; there is still no *default* path, since none exists to default to. |
 | **No built-in private-registry authentication** | Unlike this orb's sibling `bitbucket` orb (which has `registry-username`/`registry-password` parameters), `run-plugin` always does a plain, unauthenticated `docker pull`. For a private plugin image, `docker login` yourself first -- a `pre-steps` step on the `harness/plugin` job, or a step before `run-plugin`/`plugin` if you're composing commands directly. |
 | **Harness's `connectorRef` / SaaS control plane** | No account, delegate, or `lite-engine` involved at all -- this orb only ever shells out to `docker run` locally. Anything that requires Harness's own backend (audit trails, approval gates, template library) has no equivalent. |
 | **A Drone/Harness plugin with no public Docker image** | This orb only runs a plugin by its Docker image reference -- a plugin only ever distributed as a Harness-hosted "built-in" step with no separate pullable image can't be targeted. |
@@ -307,6 +414,8 @@ depth where linked):
 - Real vendor `PLUGIN_*` settings, verified against Harness's own docs and real plugin source - not guessed.
 - Plugin output variables land in `$BASH_ENV` under their own vendor names, so a native `run` step right after can just read them.
 - `--privileged` support for Docker-in-Docker plugins (e.g. `plugins/github-actions`).
+- Opt-in `store_test_results` via `test-results-path`, once you know your plugin's own JUnit XML output path.
+- A one-line stderr warning when `image` isn't pinned by digest.
 
 ## Commands and job reference
 
@@ -343,6 +452,7 @@ native steps interleaved between individual stages (e.g. inspecting the derived 
 | `env-file` | string | `/tmp/harness-orb/plugin.env` | Host path of the derived `docker --env-file`. |
 | `additional-docker-flags` | string | `""` | Extra flags passed through to `docker run` verbatim. |
 | `step-name` | string | `Run Harness plugin` | Name of the step that runs the plugin container -- override when chaining plugins so job-log steps are distinguishable. |
+| `test-results-path` | string | `""` | Opt-in only. When set, runs `store_test_results` against this path after the plugin finishes. Left empty (the default), nothing runs -- there's no vendor-wide default path to fall back to. |
 
 Individual commands (`create-output-file`, `map-env`, `run-plugin`, `collect-outputs`) expose the
 matching subset of these parameters under the same names -- see each command's own description on

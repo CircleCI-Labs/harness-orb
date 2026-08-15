@@ -470,6 +470,170 @@ jobs:
             esac
             echo "OK: PATH/BASH_ENV/LD_PRELOAD output lines were all refused with a warning; SAFE_OUTPUT still exported normally."
 
+  # Regression test (security review Finding #4, HIGH): harness-orb's reserved-shell-var
+  # denylist in collect-outputs.sh was a strict subset of the identical arrays in the sibling
+  # bitbucket-pipes-orb/buildkite-orb scripts -- missing SHELL, DYLD_INSERT_LIBRARIES,
+  # DYLD_LIBRARY_PATH, NODE_OPTIONS, GIT_SSH_COMMAND, PERL5LIB, PYTHONPATH, CDPATH, RUBYOPT.
+  # GIT_SSH_COMMAND is the concrete exploit named in the audit: a compromised/malicious plugin
+  # image writes GIT_SSH_COMMAND=<script it planted>, collect-outputs.sh exports it into
+  # $BASH_ENV verbatim, and any later native step that touches git over SSH (a chained
+  # checkout, a submodule fetch, a deploy step) executes the attacker's script with the job's
+  # full credentials. Exercises the real script directly against a hand-written fixture
+  # output file -- no docker, no credentials.
+  test_collect_outputs_denylist_parity_regression:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: "Regression test - GIT_SSH_COMMAND (and the other parity additions) are refused, not exported"
+          command: |
+            set -euo pipefail
+            output_file="$(mktemp)"
+            {
+              echo "GIT_SSH_COMMAND=/tmp/evil-ssh-wrapper.sh"
+              echo "NODE_OPTIONS=--require /tmp/evil.js"
+              echo "PYTHONPATH=/tmp/evil-site-packages"
+              echo "CDPATH=/tmp/evil"
+              echo "SAFE_OUTPUT=this_one_is_fine"
+            } > "${output_file}"
+            bash_env_file="$(mktemp)"
+
+            warning_output="$(BASH_ENV="${bash_env_file}" ORB_VAL_OUTPUT_FILE="${output_file}" bash src/scripts/collect-outputs.sh 2>&1)"
+            echo "${warning_output}"
+
+            for reserved in GIT_SSH_COMMAND NODE_OPTIONS PYTHONPATH CDPATH; do
+              if grep -q "^export ${reserved}=" "${bash_env_file}"; then
+                echo "FAIL: '${reserved}' was exported into \$BASH_ENV -- the denylist-parity fix did not block it:" >&2
+                cat "${bash_env_file}" >&2
+                exit 1
+              fi
+            done
+            if ! grep -q "^export SAFE_OUTPUT=" "${bash_env_file}"; then
+              echo "FAIL: SAFE_OUTPUT (a legitimate, non-reserved output) was not exported -- the denylist is too broad:" >&2
+              cat "${bash_env_file}" >&2
+              exit 1
+            fi
+            case "${warning_output}" in
+              *"reserved variable 'GIT_SSH_COMMAND'"*) ;;
+              *)
+                echo "FAIL: expected a warning naming the reserved variable 'GIT_SSH_COMMAND', got:" >&2
+                echo "${warning_output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: GIT_SSH_COMMAND/NODE_OPTIONS/PYTHONPATH/CDPATH output lines were all refused with a warning; SAFE_OUTPUT still exported normally."
+
+  # Regression test (security review Finding #7, MEDIUM): run-plugin.sh never nudged toward
+  # immutable pinning the way the sibling buildkite-orb's fetch-plugin.sh already does for an
+  # unpinned plugin #ref. Confirms the new digest-pin warning fires for an unpinned image
+  # reference and stays silent once the image is pinned by digest.
+  test_run_plugin_digest_pin_warning:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: "An unpinned image reference (no @sha256:) triggers the digest-pin warning"
+          command: |
+            set -euo pipefail
+            fakebin="$(mktemp -d)"
+            printf '#!/bin/bash\ntrue\n' >"${fakebin}/docker"
+            chmod +x "${fakebin}/docker"
+            workspace="$(mktemp -d)"
+            output_file="$(mktemp)"
+            env_file="$(mktemp)"
+            output="$(PATH="${fakebin}:${PATH}" \
+              ORB_VAL_IMAGE="plugins/slack:1.4.1" \
+              ORB_VAL_ENV_FILE="${env_file}" \
+              ORB_VAL_WORKSPACE_PATH="${workspace}" \
+              ORB_VAL_CONTAINER_WORKSPACE_PATH="/harness" \
+              ORB_VAL_OUTPUT_FILE="${output_file}" \
+              ORB_VAL_CONTAINER_OUTPUT_FILE="/harness-orb-output.env" \
+              ORB_VAL_PRIVILEGED="false" \
+              ORB_VAL_PULL="false" \
+              ORB_VAL_ADDITIONAL_DOCKER_FLAGS="" \
+              bash src/scripts/run-plugin.sh 2>&1)"
+            case "${output}" in
+              *"WARNING"*"not pinned to a digest"*) ;;
+              *)
+                echo "FAIL: expected a digest-pin warning for an unpinned image, got:" >&2
+                echo "${output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: unpinned image reference triggered the digest-pin warning."
+      - run:
+          name: "An image pinned by digest (@sha256:) stays silent"
+          command: |
+            set -euo pipefail
+            fakebin="$(mktemp -d)"
+            printf '#!/bin/bash\ntrue\n' >"${fakebin}/docker"
+            chmod +x "${fakebin}/docker"
+            workspace="$(mktemp -d)"
+            output_file="$(mktemp)"
+            env_file="$(mktemp)"
+            output="$(PATH="${fakebin}:${PATH}" \
+              ORB_VAL_IMAGE="plugins/slack@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
+              ORB_VAL_ENV_FILE="${env_file}" \
+              ORB_VAL_WORKSPACE_PATH="${workspace}" \
+              ORB_VAL_CONTAINER_WORKSPACE_PATH="/harness" \
+              ORB_VAL_OUTPUT_FILE="${output_file}" \
+              ORB_VAL_CONTAINER_OUTPUT_FILE="/harness-orb-output.env" \
+              ORB_VAL_PRIVILEGED="false" \
+              ORB_VAL_PULL="false" \
+              ORB_VAL_ADDITIONAL_DOCKER_FLAGS="" \
+              bash src/scripts/run-plugin.sh 2>&1)"
+            case "${output}" in
+              *"not pinned to a digest"*)
+                echo "FAIL: expected no digest-pin warning for a digest-pinned image, got:" >&2
+                echo "${output}" >&2
+                exit 1
+                ;;
+              *) ;;
+            esac
+            echo "OK: digest-pinned image reference stayed silent."
+
+  # New-feature test (limitations reassessment item #6): test-results-path is an opt-in
+  # parameter converting "Harness has no Plugin-step test-report convention" from a dead end
+  # into something a user can wire up deliberately, once they know their own plugin's output
+  # path. Writes a real JUnit XML fixture into the checkout, then proves both branches of the
+  # `when` condition: a non-empty path runs store_test_results against it (job stays green
+  # against real JUnit XML), and the default empty path adds no such step (proven by the
+  # existing test_plugin_command job above never setting it and staying green with no test
+  # results directory present at all).
+  test_plugin_test_results_path:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - run:
+          name: Build credential-free test-fixture plugin image
+          command: docker build -t harness-orb-test-fixture:ci ./test-fixtures/plugin
+      - run:
+          name: Write a real JUnit XML fixture into the checkout
+          command: |
+            mkdir -p test-results-fixture
+            cat > test-results-fixture/results.xml \<<'XML'
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuite name="fixture" tests="1" failures="0">
+              <testcase classname="fixture" name="passes"/>
+            </testsuite>
+            XML
+      - harness/plugin:
+          image: harness-orb-test-fixture:ci
+          pull: false
+          test-results-path: test-results-fixture
+          settings: |
+            message: exercising test-results-path
+            greeting: bonjour
+      - run:
+          name: Assert the plugin itself still ran normally with test-results-path set
+          command: |
+            set -euo pipefail
+            test "${GREETING_ECHOED:-}" = "bonjour"
+            echo "OK: test-results-path did not interfere with the plugin's own run/output collection."
+
   # Genuinely complex/high-value target, per the release-readiness brief: a real,
   # published, credential-free Drone/Harness plugin (plugins/github-actions) that itself
   # runs Docker-in-Docker to emulate a GitHub Action -- the hardest case this orb
@@ -525,6 +689,12 @@ workflows:
           filters: *filters
       - test_collect_outputs_reserved_var_denylist:
           filters: *filters
+      - test_collect_outputs_denylist_parity_regression:
+          filters: *filters
+      - test_run_plugin_digest_pin_warning:
+          filters: *filters
+      - test_plugin_test_results_path:
+          filters: *filters
       - test_plugin_docker_privileged_complex_target:
           filters: *filters
       - harness/plugin:
@@ -550,6 +720,9 @@ workflows:
             - test_create_output_file
             - test_plugin_idempotency
             - test_collect_outputs_reserved_var_denylist
+            - test_collect_outputs_denylist_parity_regression
+            - test_run_plugin_digest_pin_warning
+            - test_plugin_test_results_path
             - test_plugin_docker_privileged_complex_target
             - "Testing Overriding Executor"
       - orb-tools/publish:

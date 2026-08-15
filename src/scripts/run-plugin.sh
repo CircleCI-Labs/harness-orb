@@ -6,6 +6,19 @@ if [ -z "${ORB_VAL_IMAGE}" ]; then
     exit 1
 fi
 
+# Nudge toward immutable pinning, mirroring the sibling buildkite-orb's identical warning for
+# an unpinned plugin #ref (fetch-plugin.sh). A bare `plugins/slack` or `plugins/slack:latest`
+# floats: the same config can pull a different image tomorrow with no diff in this repo to
+# review. Pinning by digest (image@sha256:...) is the only form that can never move once
+# published, so that's what this checks for specifically - an explicit non-latest TAG (e.g.
+# `:1.4.1`) is still mutable (a maintainer can force-push a tag) and does not silence this.
+case "${ORB_VAL_IMAGE}" in
+    *@sha256:*) ;;
+    *)
+        echo "WARNING: '${ORB_VAL_IMAGE}' is not pinned to a digest (@sha256:...). An image tag - including an explicit version tag - can be moved to point at different image content later with no change to this config. Pin by digest for a reproducible build, e.g. 'plugins/slack@sha256:<digest>' (find the digest with 'docker inspect --format {{.RepoDigests}} <image>' after a pull)." >&2
+        ;;
+esac
+
 if [ ! -d "${ORB_VAL_WORKSPACE_PATH}" ]; then
     echo "Error: workspace-path '${ORB_VAL_WORKSPACE_PATH}' does not exist or is not a directory." >&2
     exit 1

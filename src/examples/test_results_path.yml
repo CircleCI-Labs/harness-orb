@@ -1,0 +1,18 @@
+description: >
+  Opt into `store_test_results` for a Plugin whose own JUnit XML output path you know. Harness's
+  Plugin step type has no fixed, documented test-report convention to default against (see the
+  README's "Artifacts and test results" section), so this is deliberately opt-in rather than
+  on-by-default like the sibling `bitbucket`/`buildkite` orbs' equivalents.
+
+usage:
+  version: 2.1
+  orbs:
+    harness: cci-labs/harness@x.y.z
+  workflows:
+    test:
+      jobs:
+        - harness/plugin:
+            image: plugins/my-test-runner-plugin
+            settings: |
+              args: --junit-output=test-results
+            test-results-path: test-results

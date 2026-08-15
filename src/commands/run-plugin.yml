@@ -10,7 +10,10 @@ parameters:
     description: >
       The plugin's Docker image reference, passed through verbatim (e.g. `plugins/slack` or
       `plugins/slack:1.4.1`). An omitted tag means `:latest`, per Harness's own docs - this orb
-      does no version resolution of its own.
+      does no version resolution of its own. Pin by digest (`plugins/slack@sha256:...`) for a
+      reproducible build; any other form (no tag, `:latest`, or even an explicit version tag)
+      can point at different image content later with no diff in this config, and `run-plugin`
+      prints a one-line warning to that effect when it isn't.
   env-file:
     type: string
     default: /tmp/harness-orb/plugin.env
@@ -38,7 +41,11 @@ parameters:
       Run the plugin container with --privileged. Required by some plugins (e.g.
       plugins/github-actions, some build/Kaniko-root-mode plugins) that need Docker-in-Docker.
       Only meaningful on the `machine` executor - the docker executor and self-hosted Container
-      Runner both refuse privileged containers outright.
+      Runner both refuse privileged containers outright. This is a full host-compromise
+      primitive, not a narrow "let Docker-in-Docker work" carve-out: --privileged plus the
+      machine executor's real host-device access gives the plugin container CAP_SYS_ADMIN, from
+      which a compromised plugin image can mount a host block device and read/write the entire
+      VM filesystem. Only enable it for a plugin image you trust.
   pull:
     type: boolean
     default: true
@@ -46,7 +53,13 @@ parameters:
   additional-docker-flags:
     type: string
     default: ""
-    description: Additional flags passed through to `docker run` verbatim.
+    description: >
+      Additional flags passed through to `docker run` verbatim. Simple whitespace-split -- no
+      quoting support for values containing spaces. If you use this to pass `--network host`:
+      that collapses the plugin container into the job VM's own network namespace, so it can
+      then reach anything bound to the job's own loopback (a mock server, a database the job
+      started, a cloud metadata endpoint) that it otherwise couldn't -- a real trust-boundary
+      change, not just a networking convenience.
   step-name:
     type: string
     default: Run Harness plugin

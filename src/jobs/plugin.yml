@@ -11,7 +11,9 @@ parameters:
     type: string
     description: >
       The plugin's Docker image reference, passed through verbatim (e.g. `plugins/slack` or
-      `plugins/slack:1.4.1`). An omitted tag means `:latest`, per Harness's own docs.
+      `plugins/slack:1.4.1`). An omitted tag means `:latest`, per Harness's own docs. Pin by
+      digest (`plugins/slack@sha256:...`) for a reproducible build -- see "Immutable pinning"
+      in the README.
   settings:
     type: string
     default: ""
@@ -21,7 +23,9 @@ parameters:
   privileged:
     type: boolean
     default: false
-    description: Run the plugin container with --privileged.
+    description: >
+      Run the plugin container with --privileged. A full host-compromise primitive, not a
+      narrow carve-out: see the `plugin` command's parameter of the same name for why.
   pull:
     type: boolean
     default: true
@@ -49,11 +53,23 @@ parameters:
   additional-docker-flags:
     type: string
     default: ""
-    description: Additional flags passed through to `docker run` verbatim.
+    description: >
+      Additional flags passed through to `docker run` verbatim. Simple whitespace-split -- no
+      quoting support for values containing spaces. If you use this to pass `--network host`:
+      that collapses the plugin container into the job VM's own network namespace, so it can
+      then reach anything bound to the job's own loopback (a mock server, a database the job
+      started, a cloud metadata endpoint) that it otherwise couldn't -- a real trust-boundary
+      change, not just a networking convenience.
   step-name:
     type: string
     default: Run Harness plugin
     description: Name of the step that runs the plugin container.
+  test-results-path:
+    type: string
+    default: ""
+    description: >
+      Opt-in only - see the `plugin` command's parameter of the same name. Left empty (the
+      default), no `store_test_results` step runs.
   executor:
     type: executor
     default: default
@@ -78,3 +94,4 @@ steps:
       env-file: << parameters.env-file >>
       additional-docker-flags: << parameters.additional-docker-flags >>
       step-name: << parameters.step-name >>
+      test-results-path: << parameters.test-results-path >>
