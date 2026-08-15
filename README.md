@@ -70,6 +70,30 @@ Two further gaps worth calling out explicitly, since this is the closest thing t
 
 Plugin containers commonly run as root, so files they create in the bind-mounted workspace can be left root-owned on the host, breaking subsequent CircleCI steps. `run-plugin` reclaims ownership after every invocation - regardless of whether the plugin succeeded - trying `sudo chown` (what CircleCI's machine executor images document as available), then plain `chown`, then a throwaway container-based `chown` as a last resort, so the fix-up doesn't strictly depend on host sudo being configured.
 
+### Artifacts and test results -- deliberately not auto-defaulted
+
+Other orbs in the `cci-labs` ecosystem-bridge family default to running `store_artifacts`/
+`store_test_results` for you against a vendor-documented directory, with zero config (this orb's
+sibling `bitrise` orb, for example). This orb does **not**, on either axis, and that's a deliberate
+per-vendor decision rather than an oversight -- there's no matching Harness convention to default
+against:
+
+- **No `store_artifacts` default.** Harness's only documented Plugin-step artifact hook is
+  `PLUGIN_ARTIFACT_FILE` ([CI environment variables](https://developer.harness.io/docs/continuous-integration/ci-technical-reference/ci-env-var/#other-variables)) -- and that's a **link-manifest file**
+  Harness's own hosted UI resolves into clickable links, not a directory of real artifact bytes.
+  There is no Harness-documented fixed directory a Plugin step writes actual output files into (unlike
+  Bitrise's `$BITRISE_DEPLOY_DIR`). Wiring `store_artifacts` at some invented directory here would
+  either silently upload nothing or upload the wrong thing, which is worse than no default at all.
+- **No `store_test_results` default.** Harness's JUnit-XML/`reports:` mechanism
+  ([Report paths](https://developer.harness.io/docs/continuous-integration/use-ci/run-step-settings/#report-paths)) is a feature of **Run**/**Test** step types only -- the **Plugin** step type this orb
+  wraps has no `reports:` field and no documented test-report convention at all. Plugin-step vendor
+  images (Slack notify, Docker build/push, etc.) generally aren't test runners in the first place.
+
+If you know the specific plugin you're running writes artifacts or test reports to a predictable path
+inside the bind-mounted checkout, add your own `store_artifacts`/`store_test_results` step (or
+`post-steps:` on the `harness/plugin` job) pointed at that path -- there's just no vendor-wide
+convention this orb can default against safely.
+
 ## Features
 
 - Run any Harness/Drone Plugin-step Docker image as one step among native CircleCI steps, or as a standalone job.
@@ -155,6 +179,10 @@ This orb implements the `docker run` invocation described above purely from Harn
 ## How to Contribute
 
 We welcome [issues](https://github.com/cci-labs/harness-orb/issues) to and [pull requests](https://github.com/cci-labs/harness-orb/pulls) against this repository!
+
+**CircleCI CLI version floor: `>= 1.0.48254`.** Older CLI builds silently pack this orb's `<<include(...)>>` directives as literal text instead of expanding them, producing a broken orb that can still pass `circleci orb validate` -- a false green with no other symptom. Run `scripts/check-circleci-cli-version.sh` (also wired into `.circleci/config.yml`'s `lint-pack` workflow) before packing locally if you're not sure which build you have.
+
+**`pre-steps`/`post-steps` are reserved job-parameter names.** `circleci orb validate` rejects a job parameter literally named `pre-steps` or `post-steps` outright -- this only surfaces under `orb validate`, which needs a token, so a plain `circleci config validate`/pack will not catch it. If you're adding a new job parameter, don't pick either name.
 
 ## How to Publish An Update
 1. Merge pull requests with desired changes to the main branch.
