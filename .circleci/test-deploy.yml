@@ -404,18 +404,34 @@ jobs:
   # GitHub, all with zero credentials). Proves --privileged genuinely reaches a
   # real-world plugin that needs it, not just the synthetic boolean-plumbing check in
   # test_run_plugin_booleans above.
-  test_plugin_github_actions_privileged:
+  # NOTE, verified hands-on while adding this test: plugins/github-actions (the example
+  # in src/examples/privileged_plugin.yml) does NOT work as a real CI target on
+  # CircleCI's machine executor -- it shells out to `act` with `--container-options
+  # "-v=/:/"`, and Docker refuses that exact bind-mount ("invalid mount config for type
+  # 'bind': invalid specification: destination can't be '/'") on a real machine
+  # executor. This is a genuine incompatibility in that specific plugin's own act
+  # invocation, not a bug in this orb -- the example stays in src/examples/ as
+  # documentation of the real settings shape, but plugins/docker below is the real
+  # privileged/DinD CI target instead, since it hits the identical --privileged code
+  # path (a plugin that needs its own nested Docker daemon) without that plugin-specific
+  # act/bind-mount incompatibility.
+  test_plugin_docker_privileged_complex_target:
     machine:
       image: ubuntu-2404:current
     steps:
       - checkout
+      - run:
+          name: Write a throwaway Dockerfile for plugins/docker to build
+          command: |
+            printf 'FROM alpine:3.20\nCMD ["echo", "built by plugins/docker via harness-orb"]\n' > Dockerfile
       - harness/plugin:
-          image: plugins/github-actions
+          image: plugins/docker
           privileged: true
           settings: |
-            uses: actions/hello-world-javascript-action@v1.1
-            with: {"who-to-greet":"CircleCI ecosystem-bridge orb CI"}
-          step-name: "Run plugins/github-actions (privileged, real GH Action, no credentials)"
+            dry_run: true
+            repo: harness-orb-ci/dry-run-image
+            tags: latest
+          step-name: "Run plugins/docker (privileged, real nested Docker build, dry_run -- no registry, no credentials)"
 
 workflows:
   test-deploy:
@@ -434,7 +450,7 @@ workflows:
           filters: *filters
       - test_collect_outputs_reserved_var_denylist:
           filters: *filters
-      - test_plugin_github_actions_privileged:
+      - test_plugin_docker_privileged_complex_target:
           filters: *filters
       - harness/plugin:
           name: "Testing Overriding Executor"
@@ -458,7 +474,7 @@ workflows:
             - test_map_env_hostile_and_shapes
             - test_plugin_idempotency
             - test_collect_outputs_reserved_var_denylist
-            - test_plugin_github_actions_privileged
+            - test_plugin_docker_privileged_complex_target
             - "Testing Overriding Executor"
       - orb-tools/publish:
           name: "Publish Dev"
