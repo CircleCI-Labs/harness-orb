@@ -313,7 +313,7 @@ depth where linked):
 | Name | Kind | What it does |
 |---|---|---|
 | `plugin` | command, job | The aggregate most users want: create-output-file -> map-env -> run-plugin -> collect-outputs, in order. |
-| `create-output-file` | command | Creates the host-side file bind-mounted into the container as `$DRONE_OUTPUT`/`$HARNESS_OUTPUT`. |
+| `create-output-file` | command | Creates the host-side file bind-mounted into the container as `$DRONE_OUTPUT`/`$HARNESS_OUTPUT`. **Truncates on every call** -- so when chaining, give each plugin its own `output-file` rather than reusing one path (see below). |
 | `map-env` | command | Translates `settings:` into `PLUGIN_<KEY>` vars and the verified `CIRCLE_*` -> `DRONE_*`/`HARNESS_*` subset, writes a `docker --env-file`. |
 | `run-plugin` | command | The `docker run` invocation itself, with bind mounts and (optionally) `--privileged`. |
 | `collect-outputs` | command | Reads the output file back and exports every value verbatim into `$BASH_ENV`. |
