@@ -13,6 +13,15 @@ CircleCI Labs, including this repo, is a collection of solutions developed by me
 
 ---
 
+## Scope: one plugin per call, not a whole pipeline
+
+This orb runs **one Harness/Drone Plugin step**, not a whole Harness pipeline or `.drone.yml`.
+It is not a Harness-pipeline importer and doesn't touch Harness's own stage/pipeline
+orchestration, approvals, or templates. Everything that would normally be a *separate* stage or
+step in your old pipeline -- checkout, caching, artifact upload -- has a native CircleCI
+equivalent already (`checkout`, `save_cache`/`restore_cache`, `store_artifacts`) and this orb
+expects you to keep using those directly (see "Limits" below).
+
 ## How it works
 
 A Harness/Drone plugin's entire execution contract is `docker run -e PLUGIN_X=Y image` - confirmed directly from Harness's own [local-plugin-testing instructions](https://developer.harness.io/docs/continuous-integration/use-ci/use-drone-plugins/custom_plugins/#test-plugins-locally). This orb reduces to exactly that, decomposed into four layered commands so a future multi-plugin chain could reuse pieces of it without a breaking change:
@@ -36,6 +45,69 @@ flowchart TD
 ```
 
 Every stage is independently callable and cheap to rerun -- there's no CLI install step here at all (unlike the sibling `bitrise` orb), so chaining multiple plugins in one job (see "Chaining two plugins" below) needs no `skip-*` flags: just give each call its own `output-file`/`env-file` pair.
+
+## Mapping your existing config
+
+Here's a real Harness CI **Plugin step** -- Harness's own pipeline YAML, not Drone's --
+next to this orb's equivalent:
+
+```yaml
+# Harness CI pipeline.yaml (Plugin step)
+- step:
+    type: Plugin
+    name: Notify Slack
+    identifier: notify_slack
+    spec:
+      connectorRef: account.harnessImage
+      image: plugins/slack
+      settings:
+        webhook: <+secrets.getValue("slack_webhook")>
+        channel: dev
+```
+
+```yaml
+# .circleci/config.yml (this orb)
+version: 2.1
+orbs:
+  harness: cci-labs/harness@x.y.z
+workflows:
+  notify:
+    jobs:
+      - harness/plugin:
+          image: plugins/slack
+          settings: |
+            webhook: $SLACK_WEBHOOK
+            channel: dev
+```
+
+What actually changed, concept by concept:
+
+- **A Harness "Plugin step" becomes a `harness/plugin` command (inline, among native steps) or
+  job (standalone).** `spec.image` maps straight onto this orb's `image` parameter, verbatim --
+  no version resolution either side of the bridge.
+- **`spec.settings` (a real nested YAML map) becomes this orb's flat `settings:` string**, one
+  `key: value` per line -- see "Settings -> PLUGIN_*" above for exactly how each Harness type
+  (scalar, boolean, list, nested map) flattens. Both sides ultimately produce the same
+  `PLUGIN_<KEY>` env vars the plugin's own binary reads; Harness just hides that translation
+  behind its UI/backend, while this orb makes it a parameter you write directly.
+- **Where the vendor's secrets come from is the concept that changes the most.** Harness
+  resolves `<+secrets.getValue("slack_webhook")>` against its own Secret Manager at pipeline-run
+  time, inside Harness's SaaS control plane -- there is no equivalent backend here. Put the real
+  value in a CircleCI **context** or **project environment variable** instead, and reference it
+  as plain `$SLACK_WEBHOOK` inside `settings:`; `map-env` resolves it via `circleci env subst`
+  before the plugin container ever starts, so the secret's value never enters your committed
+  config, the same security property Harness's secret-reference syntax gives you.
+- **`connectorRef`** is Harness's abstraction for *which credential set* to pull the image with
+  (its own container registry connector). This orb has no equivalent -- it always does a plain,
+  unauthenticated `docker pull`. If your plugin image is private, log in yourself first (a
+  `pre-steps` `run: docker login ...`, or bake credentials into the executor) before
+  `harness/plugin` runs; see "Limits" below.
+- **What Harness's platform does for you that CircleCI does natively instead:** Harness's own
+  stage-level artifact/test-report conventions have no fixed Plugin-step equivalent to begin
+  with (see "Artifacts and test results" above) -- this orb deliberately doesn't default
+  `store_artifacts`/`store_test_results` for the same reason Harness itself has nothing to point
+  them at. If you know the specific plugin's own output path, wire your own `store_artifacts` /
+  `store_test_results` step (or `post-steps:` on the `harness/plugin` job).
 
 ### Why `machine`, not `docker` + `setup_remote_docker`
 
@@ -122,24 +194,9 @@ inside the bind-mounted checkout, add your own `store_artifacts`/`store_test_res
 `post-steps:` on the `harness/plugin` job) pointed at that path -- there's just no vendor-wide
 convention this orb can default against safely.
 
-## Features
+## Quick start
 
-- Run any Harness/Drone Plugin-step Docker image as one step among native CircleCI steps, or as a standalone job.
-- Real vendor `PLUGIN_*` settings, verified against Harness's own docs and real plugin source - not guessed.
-- Plugin output variables land in `$BASH_ENV` under their own vendor names, so a native `run` step right after can just read them.
-- `--privileged` support for Docker-in-Docker plugins (e.g. `plugins/github-actions`).
-
-## Resources
-
-[CircleCI Orb Registry Page](https://circleci.com/developer/orbs/orb/cci-labs/harness) - the official registry page of this orb for all versions, executors, commands, and jobs described.
-
-[CircleCI Orb Docs](https://circleci.com/docs/orb-intro/#section=configuration) - docs for using, creating, and publishing CircleCI Orbs.
-
-[Harness "Use Drone plugins" docs](https://developer.harness.io/docs/continuous-integration/use-ci/use-drone-plugins/run-a-drone-plugin-in-ci/) - the vendor-side reference this orb's behavior is verified against.
-
-## Examples
-
-For the most up to date examples, please visit the Orb Registry's [usage examples](https://circleci.com/developer/orbs/orb/cci-labs/harness#usage-examples).
+For the most up to date examples, please visit the Orb Registry's [usage examples](https://circleci.com/developer/orbs/orb/cci-labs/harness#usage-examples). Three runnable ones:
 
 ### Run a plugin as a job
 
@@ -199,6 +256,133 @@ workflows:
             uses: actions/hello-world-javascript-action@v1.1
             with: {"who-to-greet":"Mona the Octocat"}
 ```
+
+## Interleaving native CircleCI steps around the plugin
+
+The `harness/plugin` **job** (only when invoked from a workflow's `jobs:` list, not the `plugin`
+**command** inside another job's own `steps:`) accepts CircleCI's own built-in
+`pre-steps`/`post-steps` arguments -- available on every 2.1+ job, not something this orb
+declares. Pass them at the call site:
+
+```yaml
+- harness/plugin:
+    image: plugins/slack
+    settings: |
+      webhook: $SLACK_WEBHOOK
+      channel: dev
+    pre-steps:
+      - run: echo "before checkout AND before the plugin container"
+    post-steps:
+      - run: echo "after the plugin; its outputs are already in $BASH_ENV"
+```
+
+**One real platform caveat:** `pre-steps` run before **every** step in the job, including this
+job's own internal `checkout` -- not just before the plugin. If a pre-step needs the repo
+checked out first, either do that checkout yourself inside the pre-step, or use `checkout: false`
+on the job plus an explicit `checkout` as the first entry of `pre-steps` so you control exactly
+where it lands relative to your other pre-steps.
+
+Need several native steps and several plugin invocations interleaved in a specific order within
+one job? Reach for the `plugin` **command** (or the individual `create-output-file`/`map-env`/
+`run-plugin`/`collect-outputs` commands) in a hand-rolled job instead -- see "Chaining two
+plugins" in [`src/examples/chain_two_plugins.yml`](src/examples/chain_two_plugins.yml).
+
+## Limits
+
+What genuinely doesn't work through this orb, gathered in one place (each is explained in more
+depth where linked):
+
+| Doesn't work | Why |
+|---|---|
+| **`HARNESS_OUTPUT_SECRET_FILE`** | Not wired up -- Harness's separate, feature-flag-gated auto-masked-output mechanism. A plugin using it has no equivalent here; see ["CIRCLE_* -> DRONE_*/HARNESS_*"](#circle_---drone_harness_) above. |
+| **Output variables spanning more than one CircleCI job** | This orb's `$BASH_ENV` mechanism is job-scoped; Harness's own output-variable expressions are stage-scoped (cross-job). See the same section above. |
+| **No `store_artifacts`/`store_test_results` default** | No vendor-wide Plugin-step convention exists to default against -- see "Artifacts and test results" above. |
+| **No built-in private-registry authentication** | Unlike this orb's sibling `bitbucket` orb (which has `registry-username`/`registry-password` parameters), `run-plugin` always does a plain, unauthenticated `docker pull`. For a private plugin image, `docker login` yourself first -- a `pre-steps` step on the `harness/plugin` job, or a step before `run-plugin`/`plugin` if you're composing commands directly. |
+| **Harness's `connectorRef` / SaaS control plane** | No account, delegate, or `lite-engine` involved at all -- this orb only ever shells out to `docker run` locally. Anything that requires Harness's own backend (audit trails, approval gates, template library) has no equivalent. |
+| **A Drone/Harness plugin with no public Docker image** | This orb only runs a plugin by its Docker image reference -- a plugin only ever distributed as a Harness-hosted "built-in" step with no separate pullable image can't be targeted. |
+
+## Features
+
+- Run any Harness/Drone Plugin-step Docker image as one step among native CircleCI steps, or as a standalone job.
+- Real vendor `PLUGIN_*` settings, verified against Harness's own docs and real plugin source - not guessed.
+- Plugin output variables land in `$BASH_ENV` under their own vendor names, so a native `run` step right after can just read them.
+- `--privileged` support for Docker-in-Docker plugins (e.g. `plugins/github-actions`).
+
+## Commands and job reference
+
+| Name | Kind | What it does |
+|---|---|---|
+| `plugin` | command, job | The aggregate most users want: create-output-file -> map-env -> run-plugin -> collect-outputs, in order. |
+| `create-output-file` | command | Creates the host-side file bind-mounted into the container as `$DRONE_OUTPUT`/`$HARNESS_OUTPUT`. |
+| `map-env` | command | Translates `settings:` into `PLUGIN_<KEY>` vars and the verified `CIRCLE_*` -> `DRONE_*`/`HARNESS_*` subset, writes a `docker --env-file`. |
+| `run-plugin` | command | The `docker run` invocation itself, with bind mounts and (optionally) `--privileged`. |
+| `collect-outputs` | command | Reads the output file back and exports every value verbatim into `$BASH_ENV`. |
+
+**Reach for the granular commands instead of the `plugin` aggregate when:** you're chaining
+multiple plugins in one job -- each layer reads/writes plain files and env vars with no shared
+state to skip, so give each call its own `output-file`/`env-file` pair and call
+`create-output-file` -> `map-env` -> `run-plugin` -> `collect-outputs` again (see
+[`src/examples/chain_two_plugins.yml`](src/examples/chain_two_plugins.yml)), or when you want
+native steps interleaved between individual stages (e.g. inspecting the derived `env-file` before
+`run-plugin` executes).
+
+### `plugin` (command and job) parameters
+
+| Parameter | Type | Default | What it does |
+|---|---|---|---|
+| `executor` *(job only)* | executor | `default` | The executor to run the plugin container in -- must be `machine`. |
+| `checkout` *(job only)* | boolean | `true` | Check out the project first. |
+| `image` | string | *(required)* | The plugin's Docker image reference (e.g. `plugins/slack`, `plugins/slack:1.4.1`). |
+| `settings` | string | `""` | Flat `key: value` block; each key becomes `PLUGIN_<KEY>`. `$VAR` resolved via `circleci env subst`. |
+| `privileged` | boolean | `false` | Run the container with `--privileged` (Docker-in-Docker plugins). Requires `machine`. |
+| `pull` | boolean | `true` | Run `docker pull` before `docker run`, refreshing mutable tags. |
+| `workspace-path` | string | `.` | Host directory bind-mounted into the container as its workspace. |
+| `container-workspace-path` | string | `/harness` | Container-side workspace path (`DRONE_WORKSPACE`/`HARNESS_WORKSPACE`). |
+| `output-file` | string | `/tmp/harness-orb/output.env` | Host path capturing the plugin's output variables. |
+| `container-output-file` | string | `/harness-orb-output.env` | Container-side output-file path (`DRONE_OUTPUT`/`HARNESS_OUTPUT`). |
+| `env-file` | string | `/tmp/harness-orb/plugin.env` | Host path of the derived `docker --env-file`. |
+| `additional-docker-flags` | string | `""` | Extra flags passed through to `docker run` verbatim. |
+| `step-name` | string | `Run Harness plugin` | Name of the step that runs the plugin container -- override when chaining plugins so job-log steps are distinguishable. |
+
+Individual commands (`create-output-file`, `map-env`, `run-plugin`, `collect-outputs`) expose the
+matching subset of these parameters under the same names -- see each command's own description on
+the [Orb Registry page](https://circleci.com/developer/orbs/orb/cci-labs/harness) for the
+exhaustive, always-current list.
+
+### Worked example: composing the granular commands by hand
+
+```yaml
+version: 2.1
+orbs:
+  harness: cci-labs/harness@x.y.z
+jobs:
+  notify:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - harness/create-output-file
+      - harness/map-env:
+          settings: |
+            webhook: $SLACK_WEBHOOK
+            channel: dev
+      - harness/run-plugin:
+          image: plugins/slack
+      - harness/collect-outputs
+      - run: echo "plugin finished; anything it exported is already in \$BASH_ENV"
+workflows:
+  main:
+    jobs:
+      - notify
+```
+
+## Resources
+
+[CircleCI Orb Registry Page](https://circleci.com/developer/orbs/orb/cci-labs/harness) - the official registry page of this orb for all versions, executors, commands, and jobs described.
+
+[CircleCI Orb Docs](https://circleci.com/docs/orb-intro/#section=configuration) - docs for using, creating, and publishing CircleCI Orbs.
+
+[Harness "Use Drone plugins" docs](https://developer.harness.io/docs/continuous-integration/use-ci/use-drone-plugins/run-a-drone-plugin-in-ci/) - the vendor-side reference this orb's behavior is verified against.
 
 ## Legal / compliance
 
