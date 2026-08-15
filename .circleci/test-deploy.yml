@@ -345,6 +345,78 @@ jobs:
             fi
             echo "OK: two chained harness/plugin calls in one job kept independent output-file/env-file pairs uncorrupted, and \$BASH_ENV reflects the second (latest) call as documented."
 
+  # Regression test for the reserved-variable denylist in collect-outputs.sh -- a plugin
+  # container could plant an output line named PATH/BASH_ENV/etc. and hijack every later
+  # native step that sources $BASH_ENV (see that script's own "SECURITY" comment). This
+  # is the single highest-value coverage gap identified in the release-readiness audit:
+  # the denylist existed but had zero direct regression coverage. Exercises the real
+  # script directly against a hand-written fixture output file -- no docker, no
+  # credentials -- mirroring the sibling bitrise orb's
+  # test-collect-outputs-hijack-regression job.
+  test_collect_outputs_reserved_var_denylist:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Regression test - a plugin's PATH/BASH_ENV output lines are refused, not exported
+          command: |
+            set -euo pipefail
+            output_file="$(mktemp)"
+            {
+              echo "PATH=./evilbin:/usr/bin:/bin"
+              echo "BASH_ENV=/tmp/pwned-by-plugin.sh"
+              echo "LD_PRELOAD=/tmp/evil.so"
+              echo "SAFE_OUTPUT=this_one_is_fine"
+            } > "${output_file}"
+            bash_env_file="$(mktemp)"
+            rm -f /tmp/pwned-by-plugin.sh
+
+            warning_output="$(BASH_ENV="${bash_env_file}" ORB_VAL_OUTPUT_FILE="${output_file}" bash src/scripts/collect-outputs.sh 2>&1)"
+            echo "${warning_output}"
+
+            for reserved in PATH BASH_ENV LD_PRELOAD; do
+              if grep -q "^export ${reserved}=" "${bash_env_file}"; then
+                echo "FAIL: '${reserved}' was exported into \$BASH_ENV -- the reserved-variable denylist did not block it:" >&2
+                cat "${bash_env_file}" >&2
+                exit 1
+              fi
+            done
+            if ! grep -q "^export SAFE_OUTPUT=" "${bash_env_file}"; then
+              echo "FAIL: SAFE_OUTPUT (a legitimate, non-reserved output) was not exported -- the denylist is too broad:" >&2
+              cat "${bash_env_file}" >&2
+              exit 1
+            fi
+            case "${warning_output}" in
+              *"reserved variable 'PATH'"*) ;;
+              *)
+                echo "FAIL: expected a warning naming the reserved variable 'PATH', got:" >&2
+                echo "${warning_output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: PATH/BASH_ENV/LD_PRELOAD output lines were all refused with a warning; SAFE_OUTPUT still exported normally."
+
+  # Genuinely complex/high-value target, per the release-readiness brief: a real,
+  # published, credential-free Drone/Harness plugin (plugins/github-actions) that itself
+  # runs Docker-in-Docker to emulate a GitHub Action -- the hardest case this orb
+  # supports (privileged: true, nested docker, a real third-party action pulled from
+  # GitHub, all with zero credentials). Proves --privileged genuinely reaches a
+  # real-world plugin that needs it, not just the synthetic boolean-plumbing check in
+  # test_run_plugin_booleans above.
+  test_plugin_github_actions_privileged:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - harness/plugin:
+          image: plugins/github-actions
+          privileged: true
+          settings: |
+            uses: actions/hello-world-javascript-action@v1.1
+            with: {"who-to-greet":"CircleCI ecosystem-bridge orb CI"}
+          step-name: "Run plugins/github-actions (privileged, real GH Action, no credentials)"
+
 workflows:
   test-deploy:
     jobs:
@@ -359,6 +431,10 @@ workflows:
       - test_map_env_hostile_and_shapes:
           filters: *filters
       - test_plugin_idempotency:
+          filters: *filters
+      - test_collect_outputs_reserved_var_denylist:
+          filters: *filters
+      - test_plugin_github_actions_privileged:
           filters: *filters
       - harness/plugin:
           name: "Testing Overriding Executor"
@@ -381,6 +457,8 @@ workflows:
             - test_plugin_failure_propagation
             - test_map_env_hostile_and_shapes
             - test_plugin_idempotency
+            - test_collect_outputs_reserved_var_denylist
+            - test_plugin_github_actions_privileged
             - "Testing Overriding Executor"
       - orb-tools/publish:
           name: "Publish Dev"

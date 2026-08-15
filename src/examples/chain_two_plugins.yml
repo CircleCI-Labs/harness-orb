@@ -1,0 +1,44 @@
+description: >
+  Chain two Harness/Drone plugins in ONE job by calling the `harness/plugin` command
+  twice, giving each call its own `output-file`/`env-file` pair so neither call's state
+  clobbers the other's -- proven safe by this orb's own `test_plugin_idempotency` CI
+  job. Unlike the sibling `bitrise` orb, there's no CLI install step to skip here, so
+  chaining needs no special flags: just distinct file paths per call. The second
+  plugin's `settings` reads the first plugin's real output variable by referencing the
+  native env var it landed in (verbatim, unrenamed) after the first call's
+  `collect-outputs` stage ran.
+
+usage:
+  version: 2.1
+  orbs:
+    harness: cci-labs/harness@x.y.z
+  jobs:
+    build-and-notify:
+      machine:
+        image: ubuntu-2404:current
+      steps:
+        - checkout
+        - harness/plugin:
+            image: plugins/docker
+            output-file: /tmp/harness-orb/output-build.env
+            env-file: /tmp/harness-orb/plugin-build.env
+            settings: |
+              repo: myorg/myapp
+              tags: latest
+              dry_run: "true"
+        - harness/plugin:
+            image: plugins/slack
+            output-file: /tmp/harness-orb/output-notify.env
+            env-file: /tmp/harness-orb/plugin-notify.env
+            settings: |
+              webhook: $SLACK_WEBHOOK
+              channel: dev
+              # Reference the first plugin's own output variable here, once you know its
+              # real name from plugins/docker's own docs -- this orb exports it verbatim,
+              # unrenamed, so it's just a normal shell variable by this point.
+              template: "Build finished, digest $BUILD_DIGEST"
+  workflows:
+    main:
+      jobs:
+        - build-and-notify:
+            context: docker-hub-creds

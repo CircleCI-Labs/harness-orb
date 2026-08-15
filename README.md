@@ -24,9 +24,24 @@ A Harness/Drone plugin's entire execution contract is `docker run -e PLUGIN_X=Y 
 
 The `plugin` command composes all four; the `plugin` job wraps that command with `checkout` and an executor.
 
+```mermaid
+flowchart TD
+    A[checkout] --> B["create-output-file<br/>host-side file -&gt; $DRONE_OUTPUT/$HARNESS_OUTPUT"]
+    B --> C["map-env<br/>settings: -&gt; PLUGIN_*<br/>CIRCLE_* -&gt; DRONE_*/HARNESS_* (verified subset)<br/>circleci env subst resolves $SECRETS"]
+    C --> D["run-plugin<br/>docker run --env-file ... -v checkout -v output-file<br/>[--privileged if requested]<br/>no failure wrapping: plugin's own exit code/stderr reach the job"]
+    D --> E["collect-outputs<br/>read output file back, export verbatim into $BASH_ENV<br/>denylist blocks PATH/BASH_ENV/IFS/... hijack attempts"]
+
+    style C fill:#4a4a8a,color:#fff
+    style D fill:#4a4a8a,color:#fff
+```
+
+Every stage is independently callable and cheap to rerun -- there's no CLI install step here at all (unlike the sibling `bitrise` orb), so chaining multiple plugins in one job (see "Chaining two plugins" below) needs no `skip-*` flags: just give each call its own `output-file`/`env-file` pair.
+
 ### Why `machine`, not `docker` + `setup_remote_docker`
 
 Plugin containers need a real bind-mount of the checkout, and some need `--privileged`. With `setup_remote_docker`, the job's container and the Docker daemon it talks to are two separate machines - CircleCI's own docs are explicit that you can't bind-mount there, only `docker cp`. The `docker` executor and the self-hosted Container Runner also both refuse privileged containers outright. `machine` sidesteps all of it with a real bind mount and real root, at the cost of `docker` executor's per-second billing profile - exactly the tradeoff [`CircleCI-Labs/act-orb`](https://github.com/CircleCI-Labs/act-orb) already makes for the analogous GitHub Actions case.
+
+**No vendor convenience-image executor here, deliberately.** Unlike the sibling `bitrise` orb (whose Steps run bare on the executor, with nothing else providing a toolchain), every Harness/Drone plugin **is already its own purpose-built image** - `run-plugin` just `docker run`s it directly. There is no generic Harness base image to adopt on top of that (Harness's own FAQ: "Harness doesn't provide custom Docker images for delegates"), and the `harness/default` executor's only job is to have a real Docker daemon and bind-mountable filesystem, which `machine` + `ubuntu-2404` already gives it. Checked against Harness's own docs and the Drone Community's published base images while researching this; there's genuinely nothing to add.
 
 ### Settings -> `PLUGIN_*`
 
