@@ -450,7 +450,7 @@ native steps interleaved between individual stages (e.g. inspecting the derived 
 | `output-file` | string | `/tmp/harness-orb/output.env` | Host path capturing the plugin's output variables. |
 | `container-output-file` | string | `/harness-orb-output.env` | Container-side output-file path (`DRONE_OUTPUT`/`HARNESS_OUTPUT`). |
 | `env-file` | string | `/tmp/harness-orb/plugin.env` | Host path of the derived `docker --env-file`. |
-| `additional-docker-flags` | string | `""` | Extra flags passed through to `docker run` verbatim. |
+| `additional-docker-flags` | string | `""` | Extra flags passed through to `docker run` verbatim. Note what some of these cost you: `--network host` removes the plugin container's network isolation, putting it on the job's own network namespace where it can reach anything bound in the job (including cloud-instance metadata endpoints) -- it is required only when the plugin must reach a server running inside the job container, since a sibling container on the default bridge cannot, and should not be set otherwise. Mounting the Docker socket or adding capabilities has the same character: it widens what a third-party image can reach. |
 | `step-name` | string | `Run Harness plugin` | Name of the step that runs the plugin container -- override when chaining plugins so job-log steps are distinguishable. |
 | `test-results-path` | string | `""` | Opt-in only. When set, runs `store_test_results` against this path after the plugin finishes. Left empty (the default), nothing runs -- there's no vendor-wide default path to fall back to. |
 
