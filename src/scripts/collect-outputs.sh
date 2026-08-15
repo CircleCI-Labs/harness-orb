@@ -54,8 +54,8 @@ while IFS= read -r line || [ -n "${line}" ]; do
     # Export the plugin's own key VERBATIM (no renaming) with the value quoted for BASH_ENV,
     # so a later `source $BASH_ENV` in a native run step reproduces it exactly, special
     # characters included.
-    printf 'export %s=%q\n' "${key}" "${value}" >>"${BASH_ENV}"
+    printf 'export %s=%q\n' "${key}" "${value}" >> "${BASH_ENV}"
     count=$((count + 1))
-done <"${ORB_VAL_OUTPUT_FILE}"
+done < "${ORB_VAL_OUTPUT_FILE}"
 
 echo "Exported ${count} plugin output variable(s) into \$BASH_ENV."

@@ -9,7 +9,7 @@ set -euo pipefail
 # exists so that trap surfaces as a loud, early failure instead of a silent one.
 MIN_BUILD=48254
 
-if ! command -v circleci >/dev/null 2>&1; then
+if ! command -v circleci > /dev/null 2>&1; then
     echo "check-circleci-cli-version: no 'circleci' binary found on PATH." >&2
     echo "Install the CircleCI CLI (>= 1.0.${MIN_BUILD}) before packing/validating this orb." >&2
     exit 1

@@ -2,7 +2,7 @@ version: 2.1
 orbs:
   # Your orb will be automatically injected here during the pipeline.
   # Reference your orb's jobs and commands below as they will exist when built.
-  orb-tools: circleci/orb-tools@12.3.0
+  orb-tools: circleci/orb-tools@12.5.0
   # The orb definition is intentionally not included here. It will be injected into the pipeline.
   harness: {}
 
@@ -129,6 +129,222 @@ jobs:
             fi
             echo "OK: privileged: false and pull: false both correctly did nothing."
 
+  # Gap-closing test: a FAILING plugin must fail with its own exit code, not get swallowed or
+  # coerced to some other value by run-plugin.sh's own post-run ownership-fixup logic, which
+  # runs unconditionally "regardless of whether the plugin succeeded" per that script's own
+  # comments and must not clobber a genuine plugin failure. Exercises the real credential-free
+  # test-fixture image (built locally) via src/scripts/run-plugin.sh directly -- the actual
+  # script, not a faked docker binary -- so this proves the real propagation path end-to-end.
+  # PLUGIN_FAIL is a test-fixture-only escape hatch (see test-fixtures/plugin/entrypoint.sh);
+  # it is not a real Drone/Harness plugin settings key.
+  test_plugin_failure_propagation:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - run:
+          name: Build credential-free test-fixture plugin image
+          command: docker build -t harness-orb-test-fixture:ci ./test-fixtures/plugin
+      - run:
+          name: Regression test - a failing plugin's own exit code reaches the job unchanged
+          command: |
+            set -euo pipefail
+            workspace="$(mktemp -d)"
+            output_file="$(mktemp)"
+            env_file="$(mktemp)"
+            printf 'PLUGIN_FAIL=42\n' >"${env_file}"
+
+            set +e
+            ORB_VAL_IMAGE="harness-orb-test-fixture:ci" \
+              ORB_VAL_ENV_FILE="${env_file}" \
+              ORB_VAL_WORKSPACE_PATH="${workspace}" \
+              ORB_VAL_CONTAINER_WORKSPACE_PATH="/harness" \
+              ORB_VAL_OUTPUT_FILE="${output_file}" \
+              ORB_VAL_CONTAINER_OUTPUT_FILE="/harness-orb-output.env" \
+              ORB_VAL_PRIVILEGED="false" \
+              ORB_VAL_PULL="false" \
+              ORB_VAL_ADDITIONAL_DOCKER_FLAGS="" \
+              bash src/scripts/run-plugin.sh
+            actual_exit=$?
+            set -e
+
+            if [ "${actual_exit}" -ne 42 ]; then
+              echo "FAIL: expected run-plugin.sh to exit 42 (the fixture's own PLUGIN_FAIL exit code), got ${actual_exit}" >&2
+              exit 1
+            fi
+            echo "OK: a failing plugin's own exit code (42) reached the job unchanged, and the post-run ownership fix-up did not mask it."
+
+  # Gap-closing test: map-env.sh's input-shape/validation branches had zero direct CI coverage.
+  # Exercises the real script directly (with the real `circleci` CLI on PATH, as on any actual
+  # CircleCI job image, so `circleci env subst` runs for real) against a battery of ORB_VAL_SETTINGS
+  # shapes: valid ones (hyphenated key, boolean-looking value, comma-joined list, nested-map JSON),
+  # and invalid ones (a key containing a space, and malformed JSON starting with '{'). Also pins
+  # down a real, current edge case worth documenting explicitly: an empty settings VALUE can never
+  # be expressed today, because this script trims trailing whitespace off the whole line before
+  # checking for the "key: value" colon-space separator, so "key: " (empty value) collapses to
+  # "key:" and is rejected as "not 'key: value'" rather than accepted as key="".
+  test_map_env_hostile_and_shapes:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Ensure python3 is present (map-env.sh's JSON-validation dependency)
+          command: |
+            command -v python3 >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y python3)
+      - run:
+          name: Valid shapes - hyphenated key, boolean-looking value, list, nested-map JSON
+          command: |
+            set -euo pipefail
+            env_file="$(mktemp)"
+            ORB_VAL_ENV_FILE="${env_file}" \
+              ORB_VAL_CONTAINER_WORKSPACE_PATH="/harness" \
+              ORB_VAL_CONTAINER_OUTPUT_FILE="/harness-orb-output.env" \
+              ORB_VAL_SETTINGS=$'repo-url: https://example.com/x\nenabled: true\ntags: a,b,c\nwith: {"a":"b"}' \
+              bash src/scripts/map-env.sh
+
+            assert_line() {
+              if ! grep -qx "$1" "${env_file}"; then
+                echo "FAIL: expected line '$1' in derived env-file, got:" >&2
+                cat "${env_file}" >&2
+                exit 1
+              fi
+            }
+            assert_line "PLUGIN_REPO_URL=https://example.com/x"
+            assert_line "PLUGIN_ENABLED=true"
+            assert_line "PLUGIN_TAGS=a,b,c"
+            assert_line 'PLUGIN_WITH={"a":"b"}'
+            echo "OK: hyphenated key, boolean-looking value, list, and nested-map JSON all mapped correctly."
+      - run:
+          name: Invalid shape - a settings key containing a space is rejected, not silently mangled
+          command: |
+            set -eu
+            env_file="$(mktemp)"
+            set +e
+            error_output="$(ORB_VAL_ENV_FILE="${env_file}" \
+              ORB_VAL_CONTAINER_WORKSPACE_PATH="/harness" \
+              ORB_VAL_CONTAINER_OUTPUT_FILE="/harness-orb-output.env" \
+              ORB_VAL_SETTINGS=$'bad key: value' \
+              bash src/scripts/map-env.sh 2>&1)"
+            actual_exit=$?
+            set -e
+            if [ "${actual_exit}" -eq 0 ]; then
+              echo "FAIL: expected map-env.sh to reject a settings key containing a space, but it exited 0" >&2
+              exit 1
+            fi
+            case "${error_output}" in
+              *"does not produce a valid env var name"*) ;;
+              *)
+                echo "FAIL: expected the 'does not produce a valid env var name' error, got:" >&2
+                echo "${error_output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: a settings key containing a space is rejected with a clear error."
+      - run:
+          name: Invalid shape - malformed JSON-looking value is rejected before reaching the plugin
+          command: |
+            set -eu
+            env_file="$(mktemp)"
+            set +e
+            error_output="$(ORB_VAL_ENV_FILE="${env_file}" \
+              ORB_VAL_CONTAINER_WORKSPACE_PATH="/harness" \
+              ORB_VAL_CONTAINER_OUTPUT_FILE="/harness-orb-output.env" \
+              ORB_VAL_SETTINGS=$'bad_json: {not valid}' \
+              bash src/scripts/map-env.sh 2>&1)"
+            actual_exit=$?
+            set -e
+            if [ "${actual_exit}" -eq 0 ]; then
+              echo "FAIL: expected map-env.sh to reject malformed JSON-looking settings.bad_json, but it exited 0" >&2
+              exit 1
+            fi
+            case "${error_output}" in
+              *"failed to parse as JSON"*) ;;
+              *)
+                echo "FAIL: expected the 'failed to parse as JSON' error, got:" >&2
+                echo "${error_output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: malformed JSON-looking settings value is rejected with a clear, key-specific error."
+      - run:
+          name: Documented edge case - an empty settings value can never be expressed today
+          command: |
+            set -eu
+            env_file="$(mktemp)"
+            set +e
+            error_output="$(ORB_VAL_ENV_FILE="${env_file}" \
+              ORB_VAL_CONTAINER_WORKSPACE_PATH="/harness" \
+              ORB_VAL_CONTAINER_OUTPUT_FILE="/harness-orb-output.env" \
+              ORB_VAL_SETTINGS=$'note: ' \
+              bash src/scripts/map-env.sh 2>&1)"
+            actual_exit=$?
+            set -e
+            if [ "${actual_exit}" -eq 0 ]; then
+              echo "FAIL: expected map-env.sh to reject a trailing-whitespace-only value line, but it exited 0 - if this now succeeds, map-env.sh's empty-value handling changed and this test (and the README, if it documents this gap) should be updated accordingly" >&2
+              exit 1
+            fi
+            case "${error_output}" in
+              *"is not 'key: value'"*) ;;
+              *)
+                echo "FAIL: expected the 'is not key: value' error, got:" >&2
+                echo "${error_output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK (documented gap, not a bug fix here): an empty settings value collapses to 'key:' after trailing-whitespace trim and is rejected, exactly as today's map-env.sh behaves."
+
+  # Gap-closing test: prove two chained `harness/plugin` calls in the same job (the pattern the
+  # README's "chained plugins" guidance implies is safe) keep their own output-file/env-file pairs
+  # independent and uncorrupted, as long as the caller gives each call distinct file paths.
+  test_plugin_idempotency:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - run:
+          name: Build credential-free test-fixture plugin image
+          command: docker build -t harness-orb-test-fixture:ci ./test-fixtures/plugin
+      - harness/plugin:
+          image: harness-orb-test-fixture:ci
+          pull: false
+          output-file: /tmp/harness-orb/output-first.env
+          env-file: /tmp/harness-orb/plugin-first.env
+          settings: |
+            message: first call
+            greeting: bonjour
+      - harness/plugin:
+          image: harness-orb-test-fixture:ci
+          pull: false
+          output-file: /tmp/harness-orb/output-second.env
+          env-file: /tmp/harness-orb/plugin-second.env
+          settings: |
+            message: second call
+            greeting: hola
+      - run:
+          name: Assert both calls' output-file/env-file pairs stayed independent and uncorrupted
+          command: |
+            set -euo pipefail
+            assert_contains() {
+              if ! grep -qx "$2" "$1"; then
+                echo "FAIL: expected '$2' in $1, got:" >&2
+                cat "$1" >&2
+                exit 1
+              fi
+            }
+            assert_contains /tmp/harness-orb/output-first.env "GREETING_ECHOED=bonjour"
+            assert_contains /tmp/harness-orb/output-second.env "GREETING_ECHOED=hola"
+            assert_contains /tmp/harness-orb/plugin-first.env "PLUGIN_MESSAGE=first call"
+            assert_contains /tmp/harness-orb/plugin-second.env "PLUGIN_MESSAGE=second call"
+            # $BASH_ENV is job-scoped and append-only (documented behavior, not a bug): the second
+            # call's export of the same verbatim key (GREETING_ECHOED) is the one a later native
+            # step now sees.
+            if [ "${GREETING_ECHOED:-}" != "hola" ]; then
+              echo "FAIL: expected \$BASH_ENV to reflect the second call's GREETING_ECHOED='hola' (last-exported wins), got '${GREETING_ECHOED:-<unset>}'" >&2
+              exit 1
+            fi
+            echo "OK: two chained harness/plugin calls in one job kept independent output-file/env-file pairs uncorrupted, and \$BASH_ENV reflects the second (latest) call as documented."
+
 workflows:
   test-deploy:
     jobs:
@@ -137,6 +353,12 @@ workflows:
       - test_plugin_command:
           filters: *filters
       - test_run_plugin_booleans:
+          filters: *filters
+      - test_plugin_failure_propagation:
+          filters: *filters
+      - test_map_env_hostile_and_shapes:
+          filters: *filters
+      - test_plugin_idempotency:
           filters: *filters
       - harness/plugin:
           name: "Testing Overriding Executor"
@@ -156,6 +378,9 @@ workflows:
           requires:
             - test_plugin_command
             - test_run_plugin_booleans
+            - test_plugin_failure_propagation
+            - test_map_env_hostile_and_shapes
+            - test_plugin_idempotency
             - "Testing Overriding Executor"
       - orb-tools/publish:
           name: "Publish Dev"

@@ -1,4 +1,4 @@
-# Harness Orb (Unofficial) [![CircleCI Build Status](https://circleci.com/gh/cci-labs/harness-orb.svg?style=shield "CircleCI Build Status")](https://circleci.com/gh/cci-labs/harness-orb) [![CircleCI Orb Version](https://badges.circleci.com/orbs/cci-labs/harness.svg)](https://circleci.com/developer/orbs/orb/cci-labs/harness) [![GitHub License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](https://raw.githubusercontent.com/cci-labs/harness-orb/main/LICENSE) [![CircleCI Community](https://img.shields.io/badge/community-CircleCI%20Discuss-343434.svg)](https://discuss.circleci.com/c/ecosystem/orbs)
+# Harness Orb (Unofficial) [![CircleCI Build Status](https://circleci.com/gh/CircleCI-Labs/harness-orb.svg?style=shield "CircleCI Build Status")](https://circleci.com/gh/CircleCI-Labs/harness-orb) [![CircleCI Orb Version](https://badges.circleci.com/orbs/cci-labs/harness.svg)](https://circleci.com/developer/orbs/orb/cci-labs/harness) [![GitHub License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](https://raw.githubusercontent.com/CircleCI-Labs/harness-orb/main/LICENSE) [![CircleCI Community](https://img.shields.io/badge/community-CircleCI%20Discuss-343434.svg)](https://discuss.circleci.com/c/ecosystem/orbs)
 
 The Harness Orb lets you run a single [Harness CI / Drone plugin](https://developer.harness.io/docs/continuous-integration/use-ci/use-drone-plugins/run-a-drone-plugin-in-ci/) - one of the ~180+ Docker-image "Plugin" steps in the Harness/Drone ecosystem - as a single step or job on CircleCI, with no Harness account, Drone runner, or `lite-engine`/`drone-runner-docker` involved. The plugin's settings become `PLUGIN_*` env vars exactly as Harness itself sets them, the plugin sees your checked-out code, and any output variables it writes come back into `$BASH_ENV` under their real vendor names so ordinary native CircleCI steps can read them.
 
@@ -59,7 +59,20 @@ PLUGIN_WITH={"path":"pom.xml","destination":"cie-demo-pipeline/github-action"}
 
 ### CIRCLE_\* -> DRONE_\*/HARNESS_\*
 
-Only vars with a verified equivalent are mapped: `DRONE_REPO`, `DRONE_REPO_OWNER`, `DRONE_REPO_NAME`, `DRONE_COMMIT`, `DRONE_COMMIT_BRANCH`, `DRONE_BUILD_NUMBER`, `DRONE_WORKSPACE`/`HARNESS_WORKSPACE`, `DRONE_OUTPUT`/`HARNESS_OUTPUT`. Deliberately **not** shimmed, because no CircleCI equivalent exists without inventing one: `DRONE_BUILD_EVENT`, `DRONE_STAGE_STATUS`, `DRONE_BUILD_STATUS`, `DRONE_FAILED_STEPS`, `DRONE_COMMIT_AUTHOR*`, `HARNESS_ACCOUNT_ID`/`ORG_ID`/`PROJECT_ID`/`PIPELINE_ID`/`EXECUTION_ID`/`DELEGATE_ID`, `DRONE_NETRC_*`, `DRONE_SEMVER*`/`DRONE_CALVER`.
+Only vars with a verified equivalent are mapped:
+
+| CircleCI source | Drone/Harness var(s) set |
+|---|---|
+| `$CIRCLE_PROJECT_USERNAME` | `DRONE_REPO_OWNER` |
+| `$CIRCLE_PROJECT_REPONAME` | `DRONE_REPO_NAME` |
+| `$CIRCLE_PROJECT_USERNAME`/`$CIRCLE_PROJECT_REPONAME` | `DRONE_REPO` (`owner/name`) |
+| `$CIRCLE_SHA1` | `DRONE_COMMIT` |
+| `$CIRCLE_BRANCH` | `DRONE_COMMIT_BRANCH` |
+| `$CIRCLE_BUILD_NUM` | `DRONE_BUILD_NUMBER` |
+| container-workspace-path (parameter) | `DRONE_WORKSPACE`, `HARNESS_WORKSPACE` |
+| container-output-file (parameter) | `DRONE_OUTPUT`, `HARNESS_OUTPUT`, `HARNESS_OUTPUT_FILE` |
+
+Deliberately **not** shimmed, because no CircleCI equivalent exists without inventing one: `DRONE_BUILD_EVENT`, `DRONE_STAGE_STATUS`, `DRONE_BUILD_STATUS`, `DRONE_FAILED_STEPS`, `DRONE_COMMIT_AUTHOR*`, `HARNESS_ACCOUNT_ID`/`ORG_ID`/`PROJECT_ID`/`PIPELINE_ID`/`EXECUTION_ID`/`DELEGATE_ID`, `DRONE_NETRC_*`, `DRONE_SEMVER*`/`DRONE_CALVER`.
 
 Two further gaps worth calling out explicitly, since this is the closest thing this README has to a "what doesn't work" section:
 
@@ -172,13 +185,13 @@ workflows:
             with: {"who-to-greet":"Mona the Octocat"}
 ```
 
-## Legal note
+## Legal / compliance
 
 This orb implements the `docker run` invocation described above purely from Harness's own public documentation and from Apache-2.0-licensed plugin images' own documentation (e.g. `drone-plugins/*`, `plugins/*`). It does not read, copy, fork, or consult the source of `harness/lite-engine` or `drone-runners/drone-runner-docker`, both of which are PolyForm-licensed specifically to prevent a competing CI product from reusing their runner engine.
 
 ## How to Contribute
 
-We welcome [issues](https://github.com/cci-labs/harness-orb/issues) to and [pull requests](https://github.com/cci-labs/harness-orb/pulls) against this repository!
+We welcome [issues](https://github.com/CircleCI-Labs/harness-orb/issues) to and [pull requests](https://github.com/CircleCI-Labs/harness-orb/pulls) against this repository!
 
 **CircleCI CLI version floor: `>= 1.0.48254`.** Older CLI builds silently pack this orb's `<<include(...)>>` directives as literal text instead of expanding them, producing a broken orb that can still pass `circleci orb validate` -- a false green with no other symptom. Run `scripts/check-circleci-cli-version.sh` (also wired into `.circleci/config.yml`'s `lint-pack` workflow) before packing locally if you're not sure which build you have.
 
@@ -189,7 +202,7 @@ We welcome [issues](https://github.com/cci-labs/harness-orb/issues) to and [pull
     - For the best experience, squash-and-merge and use [Conventional Commit Messages](https://conventionalcommits.org/).
 2. Find the current version of the orb.
     - You can run `circleci orb info cci-labs/harness | grep "Latest"` to see the current version.
-3. Create a [new Release](https://github.com/cci-labs/harness-orb/releases/new) on GitHub.
+3. Create a [new Release](https://github.com/CircleCI-Labs/harness-orb/releases/new) on GitHub.
     - Click "Choose a tag" and _create_ a new [semantically versioned](http://semver.org/) tag. (ex: v1.0.0)
       - We will have an opportunity to change this before we publish if needed after the next step.
 4.  Click _"+ Auto-generate release notes"_.

@@ -7,7 +7,7 @@ if [ -z "${ORB_VAL_ENV_FILE}" ]; then
 fi
 
 mkdir -p "$(dirname "${ORB_VAL_ENV_FILE}")"
-: >"${ORB_VAL_ENV_FILE}"
+: > "${ORB_VAL_ENV_FILE}"
 
 # Decide ONCE, up front, how (if at all) to resolve $VAR/${VAR} references against the job's
 # real env vars (context/project env vars), so a caller can write e.g. `webhook: $SLACK_WEBHOOK`
@@ -21,9 +21,9 @@ mkdir -p "$(dirname "${ORB_VAL_ENV_FILE}")"
 # *content* of a secret inject arbitrary additional PLUGIN_* variables, or abort the step with a
 # confusing parse error).
 subst_mode="none"
-if command -v circleci >/dev/null 2>&1; then
+if command -v circleci > /dev/null 2>&1; then
     subst_mode="circleci"
-elif command -v envsubst >/dev/null 2>&1; then
+elif command -v envsubst > /dev/null 2>&1; then
     subst_mode="envsubst"
     echo "Warning: 'circleci' CLI not found; falling back to plain envsubst for settings substitution." >&2
 else
@@ -82,8 +82,8 @@ while IFS= read -r line || [ -n "${line}" ]; do
     # as an opaque error deep inside the vendor's binary with no hint the real mistake was here.
     case "${value}" in
         '{'* | '['*)
-            if command -v python3 >/dev/null 2>&1; then
-                if ! printf '%s' "${value}" | python3 -c 'import json, sys; json.loads(sys.stdin.read())' >/dev/null 2>&1; then
+            if command -v python3 > /dev/null 2>&1; then
+                if ! printf '%s' "${value}" | python3 -c 'import json, sys; json.loads(sys.stdin.read())' > /dev/null 2>&1; then
                     echo "Error: settings.${key} looks like JSON (starts with '{' or '[') but failed to parse as JSON: ${value}" >&2
                     exit 1
                 fi
@@ -112,7 +112,7 @@ while IFS= read -r line || [ -n "${line}" ]; do
         exit 1
     fi
 
-    printf '%s=%s\n' "${env_key}" "${value}" >>"${ORB_VAL_ENV_FILE}"
+    printf '%s=%s\n' "${env_key}" "${value}" >> "${ORB_VAL_ENV_FILE}"
     plugin_count=$((plugin_count + 1))
     # Process substitution, deliberately not a herestring: two adjacent angle-bracket pairs
     # anywhere in an orb script get misparsed by CircleCI's own config compiler as a parameter
@@ -172,7 +172,7 @@ echo "Wrote ${plugin_count} PLUGIN_* var(s) derived from settings."
     printf 'DRONE_OUTPUT=%s\n' "${ORB_VAL_CONTAINER_OUTPUT_FILE}"
     printf 'HARNESS_OUTPUT=%s\n' "${ORB_VAL_CONTAINER_OUTPUT_FILE}"
     printf 'HARNESS_OUTPUT_FILE=%s\n' "${ORB_VAL_CONTAINER_OUTPUT_FILE}"
-} >>"${ORB_VAL_ENV_FILE}"
+} >> "${ORB_VAL_ENV_FILE}"
 
 # Print var NAMES only, never values - a value can be a resolved secret that isn't
 # necessarily a registered context/project env var CircleCI's own log masking would catch.

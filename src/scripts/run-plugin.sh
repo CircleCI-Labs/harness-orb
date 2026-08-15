@@ -99,12 +99,12 @@ plugin_exit_code=$?
 job_user_uid="$(id -u)"
 job_user_gid="$(id -g)"
 ownership_fixed=1
-if command -v sudo >/dev/null 2>&1 && sudo chown -R "${job_user_uid}:${job_user_gid}" "${host_workspace_abs}" 2>/dev/null; then
+if command -v sudo > /dev/null 2>&1 && sudo chown -R "${job_user_uid}:${job_user_gid}" "${host_workspace_abs}" 2> /dev/null; then
     ownership_fixed=0
-elif chown -R "${job_user_uid}:${job_user_gid}" "${host_workspace_abs}" 2>/dev/null; then
+elif chown -R "${job_user_uid}:${job_user_gid}" "${host_workspace_abs}" 2> /dev/null; then
     ownership_fixed=0
 elif docker run --rm -v "${host_workspace_abs}:/harness-orb-chown-target" busybox \
-    chown -R "${job_user_uid}:${job_user_gid}" /harness-orb-chown-target >/dev/null 2>&1; then
+    chown -R "${job_user_uid}:${job_user_gid}" /harness-orb-chown-target > /dev/null 2>&1; then
     ownership_fixed=0
 fi
 if [ "${ownership_fixed}" -ne 0 ]; then

@@ -8,4 +8,4 @@ description: |
 
 display:
   home_url: "https://developer.harness.io/docs/continuous-integration/use-ci/use-drone-plugins/run-a-drone-plugin-in-ci/"
-  source_url: "https://github.com/cci-labs/harness-orb"
+  source_url: "https://github.com/CircleCI-Labs/harness-orb"

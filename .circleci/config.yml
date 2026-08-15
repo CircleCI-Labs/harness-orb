@@ -1,8 +1,8 @@
 version: 2.1
 setup: true
 orbs:
-  orb-tools: circleci/orb-tools@12.3.0
-  shellcheck: circleci/shellcheck@3.1
+  orb-tools: circleci/orb-tools@12.5.0
+  shellcheck: circleci/shellcheck@3.4.0
 
 filters: &filters
   tags:
@@ -20,6 +20,16 @@ jobs:
       - run:
           name: Check CircleCI CLI version floor (>= 1.0.48254)
           command: bash scripts/check-circleci-cli-version.sh
+  shfmt-check:
+    # Pinned to an exact tag of the maintainer's own published image -- no
+    # credentials required, matches this repo's "pin everything" posture.
+    docker:
+      - image: mvdan/shfmt:v3.13.1-alpine
+    steps:
+      - checkout
+      - run:
+          name: shfmt (shell formatting)
+          command: shfmt -i 4 -ci -sr -d src/scripts/*.sh
 
 workflows:
   lint-pack:
@@ -32,16 +42,24 @@ workflows:
           filters: *filters
           requires: [check-cli-version]
       # Ignore RC010
+      # Ignore RC006: this repo is currently PRIVATE, and RC006's "Source URL should be
+      # valid" check is an UNAUTHENTICATED reachability probe against display.source_url --
+      # anonymous GitHub returns 404 for a private repo regardless of whether the URL is
+      # correct, so this fails even though src/@orb.yml's source_url genuinely is reachable
+      # by anyone with repo access. This exclusion MUST be removed once the repo goes public,
+      # at which point RC006 will pass on its own with no config change needed here.
       - orb-tools/review:
           filters: *filters
-          exclude: "RC010"
+          exclude: "RC010,RC006"
       - shellcheck/check:
           filters: *filters
           severity: error
+      - shfmt-check:
+          filters: *filters
       # Triggers the next workflow in the Orb Development Kit.
       - orb-tools/continue:
           pipeline_number: << pipeline.number >>
           vcs_type: << pipeline.project.type >>
           orb_name: harness
-          requires: [orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
+          requires: [orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check, shfmt-check]
           filters: *filters
