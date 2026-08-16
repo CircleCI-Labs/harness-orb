@@ -45,7 +45,7 @@ flowchart TD
     style D fill:#4a4a8a,color:#fff
 ```
 
-Every stage is independently callable and cheap to rerun -- there's no CLI install step here at all (unlike the sibling `bitrise` orb), so chaining multiple plugins in one job (see "Chaining two plugins" below) needs no `skip-*` flags: just give each call its own `output-file`/`env-file` pair.
+Every stage is independently callable and cheap to rerun -- there's no CLI install step here at all (unlike the sibling `bitrise` orb), so chaining multiple plugins in one job (see "Chaining two plugins" below) needs no `skip-*` flags: just give each call its own `output-file`/`env-file` pair. See [`docs/ROADMAP.md`](docs/ROADMAP.md)'s "Command-split decisions" for why this is four commands instead of one.
 
 ## Mapping your existing config
 
@@ -114,7 +114,7 @@ What actually changed, concept by concept:
 
 Plugin containers need a real bind-mount of the checkout, and some need `--privileged`. With `setup_remote_docker`, the job's container and the Docker daemon it talks to are two separate machines - CircleCI's own docs are explicit that you can't bind-mount there, only `docker cp`. The `docker` executor and the self-hosted Container Runner also both refuse privileged containers outright. `machine` sidesteps all of it with a real bind mount and real root, at the cost of `docker` executor's per-second billing profile - exactly the tradeoff [`CircleCI-Labs/act-orb`](https://github.com/CircleCI-Labs/act-orb) already makes for the analogous GitHub Actions case.
 
-**No vendor convenience-image executor here, deliberately.** Unlike the sibling `bitrise` orb (whose Steps run bare on the executor, with nothing else providing a toolchain), every Harness/Drone plugin **is already its own purpose-built image** - `run-plugin` just `docker run`s it directly. There is no generic Harness base image to adopt on top of that (Harness's own FAQ: "Harness doesn't provide custom Docker images for delegates"), and the `harness/default` executor's only job is to have a real Docker daemon and bind-mountable filesystem, which `machine` + `ubuntu-2404` already gives it. Checked against Harness's own docs and the Drone Community's published base images while researching this; there's genuinely nothing to add.
+**No vendor convenience-image executor here, deliberately.** Every Harness/Drone plugin is already its own purpose-built image, so `run-plugin` just `docker run`s it directly and there's no generic Harness base image to layer in -- see [`docs/ROADMAP.md`](docs/ROADMAP.md)'s "Vendor-image layering" for the full research behind that conclusion.
 
 ### Settings -> `PLUGIN_*`
 
@@ -199,7 +199,7 @@ one depends on what you're actually trying to do:
   [`circleci/continuation`](https://circleci.com/developer/orbs/orb/circleci/continuation) orb,
   where an early job computes a value and calls `continuation/continue` with a config whose
   `workflows:` block is shaped by that value. There is no way to do this with `harness/plugin`
-  output alone.
+  output alone -- see [`docs/ROADMAP.md`](docs/ROADMAP.md)'s "Workspace / parallelism fit" for why.
 
 ### Immutable pinning
 
@@ -245,19 +245,27 @@ Docker Layer Caching for the `machine` executor's Docker daemon, so a repeated p
 plugin image reuses previously-cached layers instead of pulling the full image again. **This is
 an opt-in, billed feature, gated by your CircleCI plan** -- see
 [CircleCI's Docker Layer Caching docs](https://circleci.com/docs/docker-layer-caching/) for
-current plan eligibility and pricing. Rule of thumb for whether it's worth turning on: most
-Harness/Drone plugin images (`plugins/slack`, `plugins/git`, and similar single-purpose plugins)
-are in the tens of megabytes and pull in low single-digit seconds -- DLC's own fixed overhead
-plausibly exceeds that, so leave it off. Larger plugin images (multi-hundred-MB to multi-GB --
-Android/ML/browser-class images, or a plugin that itself layers a large base image) are where
-DLC's layer-level reuse (a patch-version bump often only changes the top layer) starts to pay
-off over a full `docker pull` every run. There's no separate `docker save`/`load` caching
-mechanism in this orb on top of DLC -- it would be redundant with, and strictly worse than
-(all-or-nothing per exact tag, vs. DLC's per-layer reuse), a feature that already ships.
+current plan eligibility and pricing. See [`docs/ROADMAP.md`](docs/ROADMAP.md)'s "Image caching
+economics" for the rule of thumb on when it's actually worth turning on.
 
 ### Workspace ownership
 
 Plugin containers commonly run as root, so files they create in the bind-mounted workspace can be left root-owned on the host, breaking subsequent CircleCI steps. `run-plugin` reclaims ownership after every invocation - regardless of whether the plugin succeeded - trying `sudo chown` (what CircleCI's machine executor images document as available), then plain `chown`, then a throwaway container-based `chown` as a last resort, so the fix-up doesn't strictly depend on host sudo being configured.
+
+## Defaults that deviate from a bare `docker run`
+
+This orb intentionally overrides one of the defaults its own execution contract (`docker run -e
+PLUGIN_X=Y image`, quoted in "How it works" above) would otherwise carry:
+
+| Parameter | A bare `docker run`'s own default | This orb's default | Why |
+|---|---|---|---|
+| `pull` | Docker's own default pull policy only pulls when the image isn't already present locally -- an already-cached image is reused as-is, even for a mutable tag. | `true` | `run-plugin` runs `docker pull` before every invocation, refreshing mutable tags on every run rather than silently reusing a stale cached copy. See "Immutable pinning" above for why an unpinned reference is worth refreshing eagerly instead of trusting whatever happens to be cached. |
+
+Every other default (`privileged: false`, an unauthenticated `docker pull`, no automatic
+`store_artifacts`/`store_test_results`) matches what a bare `docker run` -- or the absence of any
+Harness Plugin-step convention to default against -- would already do; see "Artifacts and test
+results" below and "Docker-in-Docker and `--privileged`" above for why those specifically aren't
+deviations dressed up as defaults.
 
 ### Artifacts and test results -- deliberately not auto-defaulted
 
@@ -401,10 +409,10 @@ depth where linked):
 
 | Doesn't work | Why |
 |---|---|
-| **`HARNESS_OUTPUT_SECRET_FILE`** | Not wired up -- Harness's separate, feature-flag-gated auto-masked-output mechanism. A plugin using it has no equivalent here; see ["CIRCLE_* -> DRONE_*/HARNESS_*"](#circle_---drone_harness_) above. |
+| **`HARNESS_OUTPUT_SECRET_FILE`** | Not wired up -- Harness's separate, feature-flag-gated auto-masked-output mechanism. A plugin using it has no equivalent here; see ["CIRCLE_* -> DRONE_*/HARNESS_*"](#circle_---drone_harness_) above and [`docs/ROADMAP.md`](docs/ROADMAP.md) item 1. |
 | **Output variables spanning more than one CircleCI job** | This orb's `$BASH_ENV` mechanism is job-scoped; Harness's own output-variable expressions are stage-scoped (cross-job). See "Passing data across jobs anyway" above for the real `persist_to_workspace`/`continuation`-orb workarounds. |
 | **No `store_artifacts` default, and `store_test_results` is opt-in only** | No vendor-wide Plugin-step convention exists to default `store_artifacts` against at all -- see "Artifacts and test results" above. `store_test_results` has an explicit opt-in via the `test-results-path` parameter (empty by default -- nothing runs) once *you* know your specific plugin's own JUnit XML output path; there is still no *default* path, since none exists to default to. |
-| **No built-in private-registry authentication** | Unlike this orb's sibling `bitbucket` orb (which has `registry-username`/`registry-password` parameters), `run-plugin` always does a plain, unauthenticated `docker pull`. For a private plugin image, `docker login` yourself first -- a `pre-steps` step on the `harness/plugin` job, or a step before `run-plugin`/`plugin` if you're composing commands directly. |
+| **No built-in private-registry authentication** | Unlike this orb's sibling `bitbucket` orb (which has `registry-username`/`registry-password` parameters), `run-plugin` always does a plain, unauthenticated `docker pull`. For a private plugin image, `docker login` yourself first -- a `pre-steps` step on the `harness/plugin` job, or a step before `run-plugin`/`plugin` if you're composing commands directly. See [`docs/ROADMAP.md`](docs/ROADMAP.md) item 2. |
 | **Harness's `connectorRef` / SaaS control plane** | No account, delegate, or `lite-engine` involved at all -- this orb only ever shells out to `docker run` locally. Anything that requires Harness's own backend (audit trails, approval gates, template library) has no equivalent. |
 | **A Drone/Harness plugin with no public Docker image** | This orb only runs a plugin by its Docker image reference -- a plugin only ever distributed as a Harness-hosted "built-in" step with no separate pullable image can't be targeted. |
 
@@ -500,7 +508,7 @@ This orb implements the `docker run` invocation described above purely from Harn
 
 ## How to Contribute
 
-We welcome [issues](https://github.com/CircleCI-Labs/harness-orb/issues) to and [pull requests](https://github.com/CircleCI-Labs/harness-orb/pulls) against this repository!
+We welcome [issues](https://github.com/CircleCI-Labs/harness-orb/issues) to and [pull requests](https://github.com/CircleCI-Labs/harness-orb/pulls) against this repository! See [`docs/ROADMAP.md`](docs/ROADMAP.md) for items deliberately scoped out of past passes, with the reasoning recorded rather than lost.
 
 **CircleCI CLI version floor: `>= 1.0.48254`.** Older CLI builds silently pack this orb's `<<include(...)>>` directives as literal text instead of expanding them, producing a broken orb that can still pass `circleci orb validate` -- a false green with no other symptom. Run `scripts/check-circleci-cli-version.sh` (also wired into `.circleci/config.yml`'s `lint-pack` workflow) before packing locally if you're not sure which build you have.
 
