@@ -710,9 +710,9 @@ jobs:
           command: |
             set -euo pipefail
             set +e
-            output="$(docker run --rm -v "$(pwd)/src/scripts/preflight-native.sh:/preflight-native.sh:ro" \
+            output="$(docker run --rm --entrypoint sh -v "$(pwd)/src/scripts/preflight-native.sh:/preflight-native.sh:ro" \
               -e ORB_VAL_CHECKOUT=false \
-              plugins/slack sh /preflight-native.sh 2>&1)"
+              plugins/slack /preflight-native.sh 2>&1)"
             actual_exit=$?
             set -e
             echo "${output}"
@@ -734,9 +734,9 @@ jobs:
           command: |
             set -euo pipefail
             set +e
-            output="$(docker run --rm -v "$(pwd)/src/scripts/preflight-native.sh:/preflight-native.sh:ro" \
+            output="$(docker run --rm --entrypoint sh -v "$(pwd)/src/scripts/preflight-native.sh:/preflight-native.sh:ro" \
               -e ORB_VAL_CHECKOUT=false \
-              plugins/s3 sh /preflight-native.sh 2>&1)"
+              plugins/s3 /preflight-native.sh 2>&1)"
             actual_exit=$?
             set -e
             echo "${output}"
@@ -758,9 +758,9 @@ jobs:
           command: |
             set -euo pipefail
             set +e
-            output="$(docker run --rm -v "$(pwd)/src/scripts/preflight-native.sh:/preflight-native.sh:ro" \
+            output="$(docker run --rm --entrypoint sh -v "$(pwd)/src/scripts/preflight-native.sh:/preflight-native.sh:ro" \
               -e ORB_VAL_CHECKOUT=false \
-              plugins/docker sh /preflight-native.sh 2>&1)"
+              plugins/docker /preflight-native.sh 2>&1)"
             actual_exit=$?
             set -e
             echo "${output}"
@@ -789,9 +789,9 @@ jobs:
             docker build -t harness-preflight-test-no-git:ci "${build_dir}"
 
             set +e
-            output="$(docker run --rm -v "$(pwd)/src/scripts/preflight-native.sh:/preflight-native.sh:ro" \
+            output="$(docker run --rm --entrypoint sh -v "$(pwd)/src/scripts/preflight-native.sh:/preflight-native.sh:ro" \
               -e ORB_VAL_CHECKOUT=true \
-              harness-preflight-test-no-git:ci sh /preflight-native.sh 2>&1)"
+              harness-preflight-test-no-git:ci /preflight-native.sh 2>&1)"
             actual_exit=$?
             set -e
             echo "${output}"
