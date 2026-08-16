@@ -1,0 +1,66 @@
+description: >
+  Run ONE Harness/Drone plugin as a standalone job, using the plugin's OWN image as the job's
+  primary container (docker executor) instead of a separate `machine` executor running
+  `docker run`. See the `plugin-native` command's description and the README's "Native primary
+  container" section for the full mechanism and tradeoff. A SEPARATE job from `plugin` --
+  deliberately not a parameter flip on it, so nobody lands in this narrower contract (no
+  `--privileged`, no chaining a second plugin image, image must pass `preflight-native`) by
+  accident.
+
+parameters:
+  image:
+    type: string
+    description: >
+      The plugin's Docker image reference -- becomes the job's PRIMARY container. Same verbatim,
+      no-version-resolution contract as `plugin`'s `image` parameter.
+  resource-class:
+    type: string
+    default: medium
+    description: Resource class for the native executor.
+  entrypoint:
+    type: string
+    description: >
+      REQUIRED, no default. The plugin's real entrypoint command (e.g. `/bin/drone-slack`,
+      `python3 /pipe.py`). See the `plugin-native` command's parameter of the same name.
+  settings:
+    type: string
+    default: ""
+    description: "Plugin settings, one `key: value` per line."
+  checkout:
+    type: boolean
+    default: false
+    description: >
+      DEFAULT FALSE. See the `plugin-native` command's parameter of the same name -- leave false
+      and use `attach_workspace` (this job's default) unless you know the image can support a
+      real `checkout` (git + ssh present).
+  workspace-root:
+    type: string
+    default: .
+    description: Passed to `attach_workspace`'s `at` when `checkout` is false.
+  output-file:
+    type: string
+    default: /tmp/harness-orb/native-output.env
+    description: Host-side path used to capture the plugin's output variables.
+  test-results-path:
+    type: string
+    default: ""
+    description: Opt-in only. When set, runs `store_test_results` against this path after the plugin finishes.
+  step-name:
+    type: string
+    default: Run Harness plugin (native primary container)
+    description: Name of the step that execs the plugin's entrypoint.
+
+executor:
+  name: native
+  image: << parameters.image >>
+  resource_class: << parameters.resource-class >>
+
+steps:
+  - plugin-native:
+      entrypoint: << parameters.entrypoint >>
+      settings: << parameters.settings >>
+      checkout: << parameters.checkout >>
+      workspace-root: << parameters.workspace-root >>
+      output-file: << parameters.output-file >>
+      test-results-path: << parameters.test-results-path >>
+      step-name: << parameters.step-name >>

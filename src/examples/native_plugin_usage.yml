@@ -1,0 +1,46 @@
+description: >
+  Run a plugin image as the job's OWN primary container instead of `docker run`-ing it from a
+  separate `machine` executor -- no bind mount, no `--privileged`, no root-owned-file fixup, and
+  none of a `machine` VM's 30-60s boot. This only works for a plugin image that is already
+  tooling-complete for a CircleCI primary container (a shell plus tar/gzip/ca-certificates, and
+  git/ssh too if you opt into `checkout`); `preflight-native` verifies that first and refuses an
+  ineligible image with a specific reason before anything else runs. Defaults to
+  `attach_workspace` rather than `checkout` for exactly that reason: attaching a workspace an
+  earlier, ordinary job already checked out sidesteps the git/ssh/ca-certificates requirement on
+  the plugin's own image entirely. This example uses `bitbucketpipelines/git-secrets-scan`
+  (verified eligible -- it ships everything the CircleCI custom-image guide requires) purely as a
+  stand-in for "some tooling-complete plugin/pipe image with a known entrypoint"; the mechanism
+  itself is not Bitbucket-specific. Because this stand-in is a real Bitbucket pipe rather than a
+  genuine Harness/Drone plugin, it reads its own literal env var names, not the PLUGIN_<KEY>
+  contract `settings:` produces -- so this sets its handful of env vars directly via `pre-steps`
+  instead of through `settings:` (which is the right tool for an actual Harness plugin).
+
+usage:
+  version: 2.1
+  orbs:
+    harness: cci-labs/harness@x.y.z
+  jobs:
+    build:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - persist_to_workspace:
+            root: .
+            paths: ["."]
+  workflows:
+    main:
+      jobs:
+        - build
+        - harness/plugin-native:
+            requires: [build]
+            image: bitbucketpipelines/git-secrets-scan:3.2.0
+            entrypoint: python3 /pipe.py
+            workspace-root: /tmp/workspace
+            pre-steps:
+              - run:
+                  name: Set this stand-in image's own env vars directly (see description above)
+                  command: |
+                    echo 'export CREATE_REPORT=false' >> "$BASH_ENV"
+                    echo 'export GITLEAKS_COMMAND=dir' >> "$BASH_ENV"
+                    echo 'export GITLEAKS_EXTRA_ARGS=/tmp/workspace' >> "$BASH_ENV"

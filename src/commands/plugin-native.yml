@@ -1,0 +1,87 @@
+description: >
+  Run ONE Harness/Drone plugin by using the plugin's OWN image as the job's primary container
+  (the docker executor) instead of `docker run`-ing it from a separate `machine` executor. CircleCI
+  ignores the primary container's own ENTRYPOINT/CMD and runs `steps:` inside the already-live
+  container, so this execs the plugin's real entrypoint directly: no bind mount, no `docker run`,
+  no root-owned-file fixup, and (per-second billing) no `machine`-executor VM boot. In exchange:
+  no `--privileged` support, no second plugin image in the same job (the container is fixed for
+  the job's lifetime), and it only works for a plugin image that is already tooling-complete for
+  a CircleCI primary container -- `preflight-native` runs FIRST and refuses an ineligible image
+  outright, before checkout/attach_workspace, rather than letting the job break confusingly
+  partway through. See the README's "Native primary container" section for the full tradeoff,
+  including why this is a SEPARATE job/command from `plugin`/`harness/plugin`, never a parameter
+  flip on it.
+
+parameters:
+  entrypoint:
+    type: string
+    description: >
+      REQUIRED, no default. The plugin's real entrypoint command (e.g. `/bin/drone-slack`,
+      `python3 /pipe.py`) -- vendor-chosen and arbitrary; cannot be auto-detected from inside a
+      docker-executor primary container (no Docker daemon here to `docker inspect` with). Find it
+      in the plugin's own Dockerfile/documentation.
+  settings:
+    type: string
+    default: ""
+    description: >
+      Plugin settings, one `key: value` per line -- identical format/rules to the `plugin`
+      command's `settings` parameter.
+  checkout:
+    type: boolean
+    default: false
+    description: >
+      DEFAULT FALSE, unlike `plugin`. Checking out with `checkout` needs git/ssh in the primary
+      container, on top of the base tar/gzip/ca-certificates tier every invocation needs --
+      `preflight-native` enforces the stricter tier only when this is true. Leave false (the
+      default) and use `attach_workspace` instead -- attach a workspace persisted by an earlier,
+      ordinary `cimg/base`-executor job that ran `checkout` -- to sidestep the git/ssh/ca-certs
+      requirement on the plugin's own image entirely. See the README.
+  workspace-root:
+    type: string
+    default: .
+    description: >
+      Passed to `attach_workspace`'s `at` when `checkout` is false (the default). Ignored when
+      `checkout` is true.
+  output-file:
+    type: string
+    default: /tmp/harness-orb/native-output.env
+    description: Host-side (real, unmounted) path used to capture the plugin's output variables.
+  test-results-path:
+    type: string
+    default: ""
+    description: >
+      Opt-in only, identical semantics to the `plugin` command's parameter of the same name. Left
+      empty (the default), no `store_test_results` step runs.
+  step-name:
+    type: string
+    default: Run Harness plugin (native primary container)
+    description: Name of the step that execs the plugin's entrypoint.
+
+steps:
+  - preflight-native:
+      checkout: << parameters.checkout >>
+  - when:
+      condition: << parameters.checkout >>
+      steps:
+        - checkout
+  - unless:
+      condition: << parameters.checkout >>
+      steps:
+        - attach_workspace:
+            at: << parameters.workspace-root >>
+  - create-output-file:
+      output-file: << parameters.output-file >>
+  - map-env-native:
+      settings: << parameters.settings >>
+      workspace-path: << parameters.workspace-root >>
+      output-file: << parameters.output-file >>
+  - run-plugin-native:
+      entrypoint: << parameters.entrypoint >>
+      step-name: << parameters.step-name >>
+  - collect-outputs:
+      output-file: << parameters.output-file >>
+  - when:
+      condition: << parameters.test-results-path >>
+      steps:
+        - store_test_results:
+            path: << parameters.test-results-path >>

@@ -1,0 +1,27 @@
+description: >
+  Runs the Plugin's OWN image as the job's primary container (a plain `docker` executor), instead
+  of `docker run`-ing it from inside a separate `machine`-executor container. CircleCI ignores the
+  primary container's own ENTRYPOINT/CMD and runs this job's `steps:` inside the already-live
+  container, so `run-plugin-native` execs the plugin's real entrypoint as an ordinary `run:` step.
+  No bind mount, no `docker run`, no root-owned-file fixup -- but also no privileged support, no
+  second plugin image in the same job, and it only works for a plugin image that is already
+  tooling-complete for a CircleCI primary container (see the README's "Native primary container"
+  section, and the mandatory `preflight-native` step every `plugin-native` invocation runs first).
+  This executor is strictly additive: `default` (machine + docker run) is unaffected and remains
+  the only way to run a `privileged` plugin or chain two different plugin images in one job.
+
+parameters:
+  image:
+    type: string
+    description: >
+      The plugin's own Docker image reference -- this becomes the job's PRIMARY container, not an
+      image `docker run` invokes. Same verbatim, no-version-resolution contract as the `plugin`
+      job's `image` parameter (see "Immutable pinning" in the README).
+  resource_class:
+    type: string
+    default: medium
+    description: Resource class for the executor.
+
+docker:
+  - image: << parameters.image >>
+resource_class: << parameters.resource_class >>

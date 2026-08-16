@@ -1,0 +1,22 @@
+description: >
+  Mandatory eligibility gate for the native-primary-container path. Runs FIRST (before
+  checkout/attach_workspace), refusing an ineligible image with a specific, actionable reason --
+  a missing tool named by name, a stub/absent CA bundle, or (distinctly) an image that ships its
+  own Docker daemon and cannot work without one. Never a generic failure, and never a warning
+  that lets the job continue into a confusing mid-checkout break. See `native.yml`'s executor
+  description and the README's "Native primary container" section for the full mechanism.
+
+parameters:
+  checkout:
+    type: boolean
+    default: false
+    description: >
+      Must match the `checkout` parameter passed to `plugin-native`/the `plugin-native` job --
+      when true, this also enforces the stricter git/ssh tool tier that a real `checkout` needs.
+
+steps:
+  - run:
+      name: Preflight - verify this image is eligible for the native primary-container path
+      environment:
+        ORB_VAL_CHECKOUT: << parameters.checkout >>
+      command: <<include(scripts/preflight-native.sh)>>

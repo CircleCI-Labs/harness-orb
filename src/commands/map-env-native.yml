@@ -1,0 +1,35 @@
+description: >
+  Native-primary-container counterpart to `map-env`. Same PLUGIN_<KEY> settings rules and the same
+  verified CIRCLE_*->DRONE_*/HARNESS_* subset, but writes into $BASH_ENV instead of a
+  `docker --env-file` -- there is no `docker run` to consume an env-file in this model. See
+  `scripts/map-env-native.sh`'s header comment for why `map-env` itself does not drop in
+  unmodified here.
+
+parameters:
+  settings:
+    type: string
+    default: ""
+    description: >
+      Plugin settings, one `key: value` per line -- identical format/rules to the `map-env`
+      command's `settings` parameter.
+  workspace-path:
+    type: string
+    default: .
+    description: >
+      Real (unmounted, unremapped) path this job's checkout/attached workspace lives at. Mapped
+      onto DRONE_WORKSPACE/HARNESS_WORKSPACE verbatim.
+  output-file:
+    type: string
+    default: /tmp/harness-orb/native-output.env
+    description: >
+      Real path of the file created by `create-output-file`. Mapped onto
+      DRONE_OUTPUT/HARNESS_OUTPUT/HARNESS_OUTPUT_FILE verbatim.
+
+steps:
+  - run:
+      name: Map settings and CIRCLE_* vars into $BASH_ENV (native primary-container mode)
+      environment:
+        ORB_VAL_SETTINGS: << parameters.settings >>
+        ORB_VAL_WORKSPACE_PATH: << parameters.workspace-path >>
+        ORB_VAL_OUTPUT_FILE: << parameters.output-file >>
+      command: <<include(scripts/map-env-native.sh)>>

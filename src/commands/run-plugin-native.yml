@@ -1,0 +1,25 @@
+description: >
+  Execs the plugin's real entrypoint as an ordinary `run:` step inside the job's own primary
+  container (the plugin's own image) -- no `docker run`, no bind mount, no `--privileged`, no
+  post-run ownership fixup. See `scripts/run-plugin-native.sh` for the mechanism this rests on.
+
+parameters:
+  entrypoint:
+    type: string
+    description: >
+      REQUIRED, no default. The plugin's real entrypoint command (e.g. `/bin/drone-slack`,
+      `python3 /pipe.py`) -- vendor-chosen and arbitrary, so omitting this is a config-validation
+      error rather than a runtime guess: it cannot be auto-detected from inside a docker-executor
+      primary container (no Docker daemon here to `docker inspect` with). Find it in the plugin's
+      own Dockerfile or documentation.
+  step-name:
+    type: string
+    default: Run Harness plugin (native primary container)
+    description: Name of the step that execs the plugin's entrypoint.
+
+steps:
+  - run:
+      name: << parameters.step-name >>
+      environment:
+        ORB_VAL_ENTRYPOINT: << parameters.entrypoint >>
+      command: <<include(scripts/run-plugin-native.sh)>>
