@@ -818,6 +818,115 @@ jobs:
             esac
             echo "OK: plugins/docker refused with the docker-daemon-required message, distinct from a missing-tool message."
 
+  # Gap-closing test (release-readiness audit): the git-secrets-scan job below proves the native
+  # path's CIRCLE_*/workspace half end to end, but it never passes `settings:` -- it hand-writes
+  # CREATE_REPORT/GITLEAKS_COMMAND/GITLEAKS_EXTRA_ARGS into $BASH_ENV via `pre-steps`, routing
+  # AROUND map-env-native.sh entirely (that stand-in pipe reads its own literal env var names, not
+  # the PLUGIN_<KEY> contract `settings:` produces -- see native_plugin_usage.yml's own
+  # description). So map-env-native.sh's settings-parsing half -- the very half `map-env-native`
+  # was written for for (see the README's "Does map-env drop in unmodified here?") -- had zero
+  # coverage from an actual native-primary-container run; it was previously proven only by
+  # invoking the script directly with a synthetic ORB_VAL_SETTINGS, never against a real plugin
+  # receiving PLUGIN_* it can act on.
+  #
+  # Closes that gap using the SAME credential-free test-fixture image test_plugin_command already
+  # uses to prove the docker-run path's settings delivery (real settings: -> PLUGIN_MESSAGE/
+  # PLUGIN_GREETING -> the plugin's own GREETING_ECHOED/PLUGIN_RESULT output) -- now exercising
+  # the native path's own unmodified scripts (preflight-native -> create-output-file ->
+  # map-env-native -> run-plugin-native's entrypoint-exec -> collect-outputs) end to end against
+  # that same fixture, with real `settings:` passed.
+  #
+  # Why `docker run` here rather than an actual `harness/plugin-native` job invocation: CircleCI's
+  # `docker` executor resolves and pulls a job's primary container image before any step runs, so
+  # it can only ever reference an image already sitting in a registry -- it cannot pick up an
+  # image `docker build`-ed moments earlier inside a different job's `machine` executor (a
+  # separate host with no shared Docker daemon), and this repo's test-fixture image is
+  # deliberately local-only/credential-free (see test-fixtures/plugin/Dockerfile), never pushed
+  # anywhere. So it can never literally BE a `docker`-executor job's primary container in this
+  # repo's own CI. `docker run` against it instead -- the identical technique
+  # test_preflight_native_refusals already uses to treat real vendor images as stand-in native-
+  # primary-container TARGETS without needing them to be actual job primary containers -- runs the
+  # exact same unmodified scripts inside the fixture's own container filesystem/PATH, in the same
+  # order a real native-primary-container job runs them, so this proves the mechanism against a
+  # real plugin process, not just a synthetic unit test of map-env-native.sh in isolation.
+  #
+  # (Separately: this is also why test-fixtures/plugin/Dockerfile now installs `bash` -- every
+  # native-path script is a bash script fed to a `run:` step's default bash shell, and a bash-less
+  # image fails on the very first native-path step with "bash: not found". preflight-native.sh
+  # doesn't check for bash itself -- a real, separate gap, flagged but not fixed here.)
+  test_plugin_native_fixture_settings:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - run:
+          name: Build credential-free test-fixture plugin image
+          command: docker build -t harness-orb-test-fixture:ci ./test-fixtures/plugin
+      - run:
+          name: "Confirm the fixture passes preflight-native (checkout: false tier - real CA bundle, tar/gzip present), not assumed"
+          command: |
+            set -euo pipefail
+            docker run --rm --entrypoint sh \
+              -v "$(pwd)/src/scripts/preflight-native.sh:/preflight-native.sh:ro" \
+              -e ORB_VAL_CHECKOUT=false \
+              harness-orb-test-fixture:ci /preflight-native.sh
+            echo "OK: the credential-free test-fixture plugin image passes preflight-native with checkout: false - eligible as a native-primary-container target."
+      - run:
+          name: "Run the real native-path chain (preflight-native -> create-output-file -> map-env-native -> run-plugin-native -> collect-outputs) against the fixture, with real settings:"
+          command: |
+            set -euo pipefail
+            driver="$(mktemp)"
+            work_dir="$(mktemp -d)"
+            output_file="${work_dir}/native-output.env"
+            bash_env_file="${work_dir}/bash_env"
+            : > "${output_file}"
+            : > "${bash_env_file}"
+
+            cat > "${driver}" \<<'DRIVER'
+            set -eu
+            mkdir -p /harness
+            export BASH_ENV=/bash_env
+            export ORB_VAL_OUTPUT_FILE=/native-output.env
+            bash /orb-scripts/create-output-file.sh
+            ORB_VAL_CHECKOUT=false bash /orb-scripts/preflight-native.sh
+            ORB_VAL_SETTINGS='message: hello from CircleCI
+            greeting: konnichiwa' \
+              ORB_VAL_WORKSPACE_PATH=/harness \
+              bash /orb-scripts/map-env-native.sh
+            set +u; . /bash_env; set -u
+            ORB_VAL_ENTRYPOINT="/usr/local/bin/entrypoint.sh" bash /orb-scripts/run-plugin-native.sh
+            bash /orb-scripts/collect-outputs.sh
+            set +u; . /bash_env; set -u
+            echo "NATIVE_ASSERT_GREETING_ECHOED=${GREETING_ECHOED:-<unset>}"
+            echo "NATIVE_ASSERT_PLUGIN_RESULT=${PLUGIN_RESULT:-<unset>}"
+            DRIVER
+
+            output="$(docker run --rm --entrypoint sh \
+              -v "$(pwd)/src/scripts:/orb-scripts:ro" \
+              -v "${driver}:/driver.sh:ro" \
+              -v "${output_file}:/native-output.env" \
+              -v "${bash_env_file}:/bash_env" \
+              harness-orb-test-fixture:ci /driver.sh 2>&1)"
+            echo "${output}"
+
+            case "${output}" in
+              *"NATIVE_ASSERT_GREETING_ECHOED=konnichiwa"*) ;;
+              *)
+                echo "FAIL: expected settings.greeting ('konnichiwa') to reach the plugin via map-env-native's PLUGIN_GREETING export and round-trip back as GREETING_ECHOED, got:" >&2
+                echo "${output}" >&2
+                exit 1
+                ;;
+            esac
+            case "${output}" in
+              *"NATIVE_ASSERT_PLUGIN_RESULT=ok"*) ;;
+              *)
+                echo "FAIL: expected PLUGIN_RESULT=ok from the fixture plugin's own output, got:" >&2
+                echo "${output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: map-env-native.sh's settings half (PLUGIN_MESSAGE/PLUGIN_GREETING) reached the fixture plugin's real entrypoint end to end, and collect-outputs read its DRONE_OUTPUT back correctly - proving the native path's settings delivery for real, not just the CIRCLE_*/workspace half the git-secrets-scan job below covers."
+
   # Native-primary-container path, working side: proves the whole chain (preflight-native ->
   # attach_workspace -> create-output-file -> map-env-native -> run-plugin-native ->
   # collect-outputs) end to end against the ONE sampled image verified fully eligible --
@@ -861,6 +970,8 @@ workflows:
       - test_plugin_docker_privileged_complex_target:
           filters: *filters
       - test_preflight_native_refusals:
+          filters: *filters
+      - test_plugin_native_fixture_settings:
           filters: *filters
       - build_native_workspace:
           filters: *filters
@@ -920,6 +1031,7 @@ workflows:
             - test_plugin_test_results_path
             - test_plugin_docker_privileged_complex_target
             - test_preflight_native_refusals
+            - test_plugin_native_fixture_settings
             - "Test native primary container - git-secrets-scan against attached workspace"
             - "Testing Overriding Executor"
       - orb-tools/publish:

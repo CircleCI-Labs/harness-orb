@@ -520,7 +520,16 @@ workflows:
 
 See [`src/examples/native_plugin_usage.yml`](src/examples/native_plugin_usage.yml) for a complete,
 runnable version, and `.circleci/test-deploy.yml`'s `"Test native primary container..."` job for
-this repo's own real CI proof against that exact image.
+this repo's own real CI proof against that exact image. **That job proves the CIRCLE_\*/workspace
+half of the chain** (`HARNESS_WORKSPACE`/`DRONE_WORKSPACE` correctly set from the attached
+workspace) **against a real vendor image** -- it is not a real Harness/Drone plugin, so it never
+passes `settings:` and its `pre-steps` set its own env vars directly, bypassing `map-env-native`
+entirely (see that job's own comments). The settings-delivery half (`settings:` ->
+`map-env-native` -> `PLUGIN_<KEY>` reaching the plugin's own process) is proven separately, by
+`test_plugin_native_fixture_settings` in the same file, against this repo's credential-free
+test-fixture image -- see "Does `map-env` drop in unmodified here?" below for exactly what that
+job asserts and why it exists as its own job rather than being folded into the git-secrets-scan
+one.
 
 ### Why this needs `entrypoint` as a required parameter, with no default
 
@@ -633,6 +642,30 @@ any docker/bind-mount assumption baked in to begin with: `create-output-file` ju
 empty file at a path, and `collect-outputs` just reads a file back and exports its contents into
 `$BASH_ENV`. Whether the plugin wrote to that path via a bind mount or because it's running
 directly inside the same container is invisible to both scripts.
+
+**Proven in this repo's own CI, not just asserted here -- and by the right job.** This repo's CI
+runs two different jobs against the native path, and it matters which one you point at for which
+claim:
+
+- `"Test native primary container - git-secrets-scan against attached workspace"` runs a real
+  vendor image (`bitbucketpipelines/git-secrets-scan:3.2.0`) end to end and proves the
+  `CIRCLE_*`/workspace half: `HARNESS_WORKSPACE`/`DRONE_WORKSPACE` land correctly from the attached
+  workspace. That image is a stand-in pipe, not a real Harness/Drone plugin -- it reads its own
+  literal env var names, not the `PLUGIN_<KEY>` contract `settings:` produces -- so this job's
+  `pre-steps` set its handful of env vars directly and never call `map-env-native` with real
+  `settings:` at all. **It does not exercise the settings half of `map-env-native` and previously
+  got miscited here as if it did.**
+- `test_plugin_native_fixture_settings` is the job that actually proves the settings half: it runs
+  this repo's own credential-free test-fixture plugin image (the same one `test_plugin_command`
+  uses to prove the *docker-run* path's settings delivery) through the real, unmodified chain --
+  `preflight-native` -> `create-output-file` -> `map-env-native` -> `run-plugin-native`'s
+  entrypoint-exec -> `collect-outputs` -- with real `settings:` (`message`/`greeting`), and asserts
+  the fixture plugin's own output (`GREETING_ECHOED`/`PLUGIN_RESULT`) round-trips back correctly.
+  That's the job to point at for "does `map-env-native` actually deliver `settings:` to a real
+  plugin process," not the git-secrets-scan one.
+
+Both jobs are real and both stay in CI -- they prove different, complementary halves of the same
+path, and neither one alone proves the whole thing.
 
 ### What you give up, and what you don't get for free
 
