@@ -18,7 +18,7 @@ CircleCI steps can read them.
 CircleCI Labs, including this repo, is a collection of solutions developed by members of CircleCI's field engineering teams through our engagement with various customer needs.
 
 -   ✅ Created by engineers @ CircleCI
--   ⚠️ **Not yet used by production CircleCI customers.** This orb is currently dev-published only. What *is* verified: a real, credential-free Drone/Harness plugin (`plugins/docker`, running privileged, doing a real nested Docker build) runs green in this repo's own CI, see `test_plugin_docker_privileged_complex_target` in `.circleci/test-deploy.yml`.
+-   ⚠️ **Not yet used by production CircleCI customers.** This orb is newly published, with no production track record yet. What *is* verified: a real, credential-free Drone/Harness plugin (`plugins/docker`, running privileged, doing a real nested Docker build) runs green in this repo's own CI, see `test_plugin_docker_privileged_complex_target` in `.circleci/test-deploy.yml`.
 -   ❌ **not** officially supported by CircleCI support
 
 ---
