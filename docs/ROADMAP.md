@@ -87,17 +87,23 @@ runs on the same branch/image -- the second run (which should be the one that be
 cross-run layer reuse) was not measurably faster than the first, and was statistically
 indistinguishable from the `docker_layer_caching: false` runs. DLC also adds ~3s of its own fixed
 spin-up/teardown overhead per job that a plain pull never pays, on top of being a billed,
-plan-gated feature. Read plainly: DLC appears to cache `docker build` layer output, not layers
-pulled from a registry via plain `docker pull` of an already-built image -- which is exactly this
-orb's own workload (`docker run`-ing a pre-built vendor plugin image; this orb never builds one).
-`docker_layer_caching` stays `false` by this measurement, including for larger plugin images,
-correcting the previous, untested assumption in this section that size alone would tip the
-balance. There's no separate `docker save`/`load` caching mechanism in this orb; building one
-would only add the exact same registry-pull-vs-cache-pull tradeoff the sibling `act-orb` measured
-and rejected for its own `cache-images` parameter (see the link above). See
+plan-gated feature. This is the expected result, not a surprising one, once you look at the
+mechanism rather than just the benchmark: DLC caches the layers a `docker build` produces. It is
+built for `docker build`, not for `docker pull`, and it can only incidentally help a pull when an
+image's layers already happen to be present and unchanged from an earlier build on the same host.
+This orb's own workload never builds an image -- `run-plugin`/`run-plugin.sh` only `docker
+pull`s and `docker run`s a pre-built vendor plugin image verbatim -- so there is no build output
+for DLC to cache here, and no amount of image size shifts that. `docker_layer_caching` stays
+`false` by this measurement, including for larger plugin images, correcting the previous, untested
+assumption in this section that size alone would tip the balance. There's no separate `docker
+save`/`load` caching mechanism in this orb; building one would only add the exact same
+registry-pull-vs-cache-pull tradeoff the sibling `act-orb` measured and rejected for its own
+`cache-images` parameter (see the link above). The one case where DLC would genuinely matter for a
+job using this orb is a user's own `pre-steps`/`post-steps` running a real `docker build` --
+outside what this orb itself does, but exactly the case DLC exists for. See
 [LIMITS.md](LIMITS.md)'s "Caching the plugin image" section for the current user-facing guidance.
-`docker_layer_caching` remains available as an opt-in for anyone whose own plugin image or network
-conditions differ from what was measured here.
+`docker_layer_caching` remains available as an opt-in for anyone whose own plugin image, build
+steps, or network conditions differ from what was measured here.
 
 ### Command-split decisions
 

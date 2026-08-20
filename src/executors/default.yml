@@ -14,13 +14,16 @@ parameters:
     type: boolean
     default: false
     description: >
-      Enable CircleCI's Docker Layer Caching. Defaults to false, measured rather than assumed:
-      against plugins/docker (~208MB), two independent real-CircleCI runs showed no measurable
-      pull-time improvement from DLC, while DLC itself added ~3s of spin-up/teardown overhead on
-      top of its billed, plan-gated cost. See docs/ROADMAP.md's "Image caching economics" section
-      for the measured numbers and job references, and docs/LIMITS.md's "Caching the plugin
-      image" section for user-facing guidance. Available as an opt-in if your own plugin image or
-      network conditions differ from what was measured.
+      Enable CircleCI's Docker Layer Caching. DLC caches `docker build` layer output; it is not a
+      cache for `docker pull`. This orb never builds an image (it only pulls and runs a pre-built
+      vendor plugin image), so DLC has nothing of its own to cache here -- confirmed by
+      measurement, not just mechanism: against plugins/docker (~208MB), two independent
+      real-CircleCI runs showed no measurable pull-time improvement from DLC, while DLC itself
+      added ~3s of spin-up/teardown overhead on top of its billed, plan-gated cost. Defaults to
+      false accordingly. See docs/ROADMAP.md's "Image caching economics" section for the measured
+      numbers and job references, and docs/LIMITS.md's "Caching the plugin image" section for
+      user-facing guidance, including the one case (your own `pre-steps`/`post-steps` building an
+      image) where DLC would genuinely help.
   resource_class:
     type: string
     default: medium

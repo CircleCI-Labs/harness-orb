@@ -103,13 +103,22 @@ deliberately shown against a floating tag for readability.
 ## Caching the plugin image
 
 The `default` executor's `docker_layer_caching` parameter (off by default) enables CircleCI's
-Docker Layer Caching for the `machine` executor's Docker daemon. It stays off by default: measured
-on real CircleCI against `plugins/docker` (~208MB), it produced no measurable improvement to a
-repeat plugin-image pull across two independent pipeline runs, while adding its own ~3s of
-spin-up/teardown overhead plus its billed, plan-gated cost -- see [ROADMAP.md](ROADMAP.md)'s
-"Image caching economics" section for the full numbers and job references. It remains available
-as an opt-in for anyone whose own plugin image or network conditions differ from what was
-measured; see [CircleCI's Docker Layer Caching
+Docker Layer Caching for the `machine` executor's Docker daemon. DLC caches the layers a `docker
+build` produces; it is a cache for building an image, not for pulling one. It can incidentally
+speed up a pull when the target image's layers already happen to be present and unchanged from an
+earlier build on the same host, but that is not what the feature is for and it is not something to
+rely on. This orb never builds an image: `run-plugin`/`run-plugin.sh` only `docker pull`s and
+`docker run`s the vendor-published plugin image verbatim (see [ARCHITECTURE.md](ARCHITECTURE.md)),
+so there is no build step here for DLC to cache -- which is exactly why it stays off by default,
+and why measurement bears that out: against `plugins/docker` (~208MB), it produced no measurable
+improvement to a repeat plugin-image pull across two independent pipeline runs, while adding its
+own ~3s of spin-up/teardown overhead plus its billed, plan-gated cost -- see
+[ROADMAP.md](ROADMAP.md)'s "Image caching economics" section for the full numbers and job
+references. The one way DLC could matter for a job using this orb is if your own `pre-steps` or
+`post-steps` (accepted by every CircleCI 2.1+ job, including `plugin`/`plugin-native`) run a real
+`docker build` of your own -- that is what DLC is built for, and it sits entirely outside what this
+orb itself does. It remains available as an opt-in for anyone whose own build steps, plugin image,
+or network conditions differ from what was measured; see [CircleCI's Docker Layer Caching
 docs](https://circleci.com/docs/docker-layer-caching/) for current plan eligibility and pricing.
 
 ## Preflight verification drift (native path)
