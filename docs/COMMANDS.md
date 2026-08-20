@@ -86,9 +86,24 @@ and why it needs a preflight check, and [LIMITS.md](LIMITS.md) for what it gives
 | `run-plugin-native` | command | Execs `entrypoint` as an ordinary `run:` step. |
 | `native` | executor | `docker` executor whose primary container is the plugin's own `image`. |
 
-`plugin-native`'s `entrypoint` parameter has no default (see ARCHITECTURE.md for why). Every other
-parameter mirrors `plugin`'s equivalent under the same name, with `checkout` defaulting to `false`
-here (mirrored, not the same value) instead of `true`.
+### `plugin-native` (command and job) parameters
+
+| Parameter | Type | Default | What it does |
+|---|---|---|---|
+| `image` *(job only)* | string | *(required)* | The plugin's Docker image reference, becomes the job's primary container. Same verbatim, no-version-resolution contract as `plugin`'s `image` parameter. |
+| `resource-class` *(job only)* | string | `medium` | Resource class for the native executor. |
+| `entrypoint` | string | *(required)* | The plugin's real entrypoint command (for example `/bin/drone-slack`, `python3 /pipe.py`), vendor-chosen and arbitrary; cannot be auto-detected from inside a docker-executor primary container (no Docker daemon there to `docker inspect` with). Find it in the plugin's own Dockerfile/documentation. See [ARCHITECTURE.md](ARCHITECTURE.md#why-entrypoint-is-required-with-no-default) for why it has no default. |
+| `settings` | string | `""` | Plugin settings, one `key: value` per line, identical format/rules to the `plugin` command's `settings` parameter. |
+| `checkout` | boolean | `false` | Check out the project first. Defaults to `false` here (mirrored, not the same value as `plugin`'s `true`): leave it false and use `attach_workspace` against `workspace-root` unless the plugin's own image already has git/ssh/ca-certs, the stricter tier `preflight-native` enforces only when this is `true`. |
+| `workspace-root` | string | `.` | Passed to `attach_workspace`'s `at` when `checkout` is `false` (the default). Ignored when `checkout` is `true`. |
+| `output-file` | string | `/tmp/harness-orb/native-output.env` | Host-side (real, unmounted) path used to capture the plugin's output variables. |
+| `test-results-path` | string | `""` | Opt-in only. When set, runs `store_test_results` against this path after the plugin finishes. Left empty (the default), nothing runs. |
+| `step-name` | string | `Run Harness plugin (native primary container)` | Name of the step that execs the plugin's entrypoint. |
+
+Individual commands (`preflight-native`, `map-env-native`, `run-plugin-native`) expose the matching
+subset of these parameters under the same names. See each command's own description on the
+[Orb Registry page](https://circleci.com/developer/orbs/orb/cci-labs/harness) for the exhaustive,
+always-current list.
 
 This is a separate job/command from `plugin`/`harness/plugin`, deliberately, never a parameter flip
 on the existing one, so nobody lands in this narrower contract (no `privileged`, one image per job,
