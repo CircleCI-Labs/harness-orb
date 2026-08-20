@@ -103,12 +103,14 @@ deliberately shown against a floating tag for readability.
 ## Caching the plugin image
 
 The `default` executor's `docker_layer_caching` parameter (off by default) enables CircleCI's
-Docker Layer Caching for the `machine` executor's Docker daemon, so a repeated pull of the same
-plugin image reuses previously cached layers instead of pulling the full image again. This is an
-opt-in, billed feature, gated by your CircleCI plan; see [CircleCI's Docker Layer Caching
+Docker Layer Caching for the `machine` executor's Docker daemon. It stays off by default: measured
+on real CircleCI against `plugins/docker` (~208MB), it produced no measurable improvement to a
+repeat plugin-image pull across two independent pipeline runs, while adding its own ~3s of
+spin-up/teardown overhead plus its billed, plan-gated cost -- see [ROADMAP.md](ROADMAP.md)'s
+"Image caching economics" section for the full numbers and job references. It remains available
+as an opt-in for anyone whose own plugin image or network conditions differ from what was
+measured; see [CircleCI's Docker Layer Caching
 docs](https://circleci.com/docs/docker-layer-caching/) for current plan eligibility and pricing.
-See [ROADMAP.md](ROADMAP.md)'s "Image caching economics" for the rule of thumb on when it's
-actually worth turning on.
 
 ## Preflight verification drift (native path)
 
