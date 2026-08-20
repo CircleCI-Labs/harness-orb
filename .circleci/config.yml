@@ -31,42 +31,6 @@ jobs:
           name: shfmt (shell formatting)
           command: shfmt -i 4 -ci -sr -d src/scripts/*.sh
 
-  # ---------------------------------------------------------------------
-  # TEMPORARY measurement jobs for the docker_layer_caching default review
-  # (caching-defaults standard). Pulls a real, non-trivially-sized plugin
-  # image (plugins/docker, ~208MB amd64/linux, already used elsewhere in
-  # this orb's own test-deploy.yml for the real Docker-in-Docker build
-  # test) twice on the SAME branch, once with DLC off and once with DLC
-  # on, to see whether DLC actually speeds up a repeat pull of an unchanged
-  # image on the machine executor. (plugins/slack, tried first, turned out
-  # to be a ~13MB two-layer image that pulls in under a second regardless
-  # of caching -- too small to show any DLC effect either way.) Remove
-  # this workflow and these two jobs before merging any default change to
-  # main.
-  # ---------------------------------------------------------------------
-  measure-dlc-off:
-    machine:
-      image: ubuntu-2404:current
-      docker_layer_caching: false
-    resource_class: medium
-    steps:
-      - run:
-          name: "DLC=false: pull plugins/docker"
-          command: |
-            docker images plugins/docker
-            time docker pull plugins/docker
-  measure-dlc-on:
-    machine:
-      image: ubuntu-2404:current
-      docker_layer_caching: true
-    resource_class: medium
-    steps:
-      - run:
-          name: "DLC=true: pull plugins/docker"
-          command: |
-            docker images plugins/docker
-            time docker pull plugins/docker
-
 workflows:
   lint-pack:
     jobs:
@@ -94,14 +58,4 @@ workflows:
           vcs_type: << pipeline.project.type >>
           orb_name: harness
           requires: [orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check, shfmt-check]
-          filters: *filters
-
-  # TEMPORARY: measurement-only workflow for the docker_layer_caching default
-  # review. Independent of lint-pack above -- does not touch orb-tools/pack's
-  # requires. Remove before merging any resulting default change to main.
-  measure-dlc:
-    jobs:
-      - measure-dlc-off:
-          filters: *filters
-      - measure-dlc-on:
           filters: *filters

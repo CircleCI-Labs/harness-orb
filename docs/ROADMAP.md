@@ -59,20 +59,45 @@ Four cross-cutting questions came up while auditing this orb against its `cci-la
 was already answered somewhere in this orb's design; this section is where that reasoning lives
 now, instead of being spread across README prose a user has to hunt for.
 
-### Image caching economics
+### Image caching economics (measured, 2026-08)
 
-The `default` executor's `docker_layer_caching` parameter defaults to **off**. Rule of thumb: most
-Harness/Drone plugin images (`plugins/slack`, `plugins/git`, and similar single-purpose plugins)
-are in the tens of megabytes and pull in low single-digit seconds, and DLC's own fixed overhead
-plausibly exceeds that, so it isn't worth turning on for them. Larger plugin images (from
-multi-hundred-MB to multi-GB: Android/ML/browser-class images, or a plugin that itself layers a
-large base image) are where DLC's layer-level reuse (a patch-version bump often only changes the
-top layer) starts to pay off over a full `docker pull` every run. There's no separate
-`docker save`/`load` caching mechanism in this orb on top of DLC. It would be redundant with, and
-strictly worse than (all-or-nothing per exact tag, versus DLC's per-layer reuse), a feature that
-already ships. This is also a plan-gated, billed CircleCI feature; check plan eligibility before
-relying on it. See [LIMITS.md](LIMITS.md)'s "Caching the plugin image" section for the current
-user-facing guidance.
+The `default` executor's `docker_layer_caching` parameter defaults to **off**, and this was
+measured on real CircleCI rather than left as the rule-of-thumb guess this section used to make
+(small images not worth it, large ones "should" pay off). Per the CircleCI Labs orb-family
+caching-defaults standard (a cache defaults to `true` only where it measurably speeds up
+execution, paid features included; see the sibling `act-orb`'s
+[ROADMAP.md item 10](https://github.com/CircleCI-Labs/act-orb/blob/main/docs/ROADMAP.md) for the
+full statement of the rule), `docker_layer_caching` is exactly the kind of paid feature that
+should default `true` if the evidence supports it -- so it was tested against `plugins/docker`
+(~208MB amd64/linux, one of the larger plugin images and already used elsewhere in this orb's own
+test-deploy.yml), the size class this section previously predicted DLC "should" help most.
+
+**What was measured:** two independent CircleCI pipeline runs on a branch, each pulling
+`plugins/docker` once with `docker_layer_caching: false` and once with `docker_layer_caching:
+true` (job numbers 686-687 and 713-714 on `CircleCI-Labs/harness-orb`):
+
+| | DLC off | DLC on |
+|---|---|---|
+| Run 1 pull step | 4.64s | 4.89s |
+| Run 2 pull step | 5.01s | 4.88s |
+| DLC's own overhead | -- | +1.9-2.0s "Spin up environment" + 1.2-1.4s "DLC Teardown" |
+
+**The result:** DLC produced **no measurable pull-time improvement** across two separate pipeline
+runs on the same branch/image -- the second run (which should be the one that benefits from any
+cross-run layer reuse) was not measurably faster than the first, and was statistically
+indistinguishable from the `docker_layer_caching: false` runs. DLC also adds ~3s of its own fixed
+spin-up/teardown overhead per job that a plain pull never pays, on top of being a billed,
+plan-gated feature. Read plainly: DLC appears to cache `docker build` layer output, not layers
+pulled from a registry via plain `docker pull` of an already-built image -- which is exactly this
+orb's own workload (`docker run`-ing a pre-built vendor plugin image; this orb never builds one).
+`docker_layer_caching` stays `false` by this measurement, including for larger plugin images,
+correcting the previous, untested assumption in this section that size alone would tip the
+balance. There's no separate `docker save`/`load` caching mechanism in this orb; building one
+would only add the exact same registry-pull-vs-cache-pull tradeoff the sibling `act-orb` measured
+and rejected for its own `cache-images` parameter (see the link above). See
+[LIMITS.md](LIMITS.md)'s "Caching the plugin image" section for the current user-facing guidance.
+`docker_layer_caching` remains available as an opt-in for anyone whose own plugin image or network
+conditions differ from what was measured here.
 
 ### Command-split decisions
 
