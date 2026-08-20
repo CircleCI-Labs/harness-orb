@@ -33,12 +33,16 @@ jobs:
 
   # ---------------------------------------------------------------------
   # TEMPORARY measurement jobs for the docker_layer_caching default review
-  # (caching-defaults standard). Pulls a real plugin image (plugins/slack,
-  # already used elsewhere in this orb's own test-deploy.yml as a
-  # credential-free sample) twice on the SAME branch, once with DLC off and
-  # once with DLC on, to see whether DLC actually speeds up a repeat pull of
-  # an unchanged image on the machine executor. Remove this workflow and
-  # these two jobs before merging any default change to main.
+  # (caching-defaults standard). Pulls a real, non-trivially-sized plugin
+  # image (plugins/docker, ~208MB amd64/linux, already used elsewhere in
+  # this orb's own test-deploy.yml for the real Docker-in-Docker build
+  # test) twice on the SAME branch, once with DLC off and once with DLC
+  # on, to see whether DLC actually speeds up a repeat pull of an unchanged
+  # image on the machine executor. (plugins/slack, tried first, turned out
+  # to be a ~13MB two-layer image that pulls in under a second regardless
+  # of caching -- too small to show any DLC effect either way.) Remove
+  # this workflow and these two jobs before merging any default change to
+  # main.
   # ---------------------------------------------------------------------
   measure-dlc-off:
     machine:
@@ -47,10 +51,10 @@ jobs:
     resource_class: medium
     steps:
       - run:
-          name: "DLC=false: pull plugins/slack"
+          name: "DLC=false: pull plugins/docker"
           command: |
-            docker images plugins/slack
-            time docker pull plugins/slack
+            docker images plugins/docker
+            time docker pull plugins/docker
   measure-dlc-on:
     machine:
       image: ubuntu-2404:current
@@ -58,10 +62,10 @@ jobs:
     resource_class: medium
     steps:
       - run:
-          name: "DLC=true: pull plugins/slack"
+          name: "DLC=true: pull plugins/docker"
           command: |
-            docker images plugins/slack
-            time docker pull plugins/slack
+            docker images plugins/docker
+            time docker pull plugins/docker
 
 workflows:
   lint-pack:
